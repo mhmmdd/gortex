@@ -14,17 +14,17 @@ import (
 type Community struct {
 	ID       string   `json:"id"`
 	Label    string   `json:"label"`
-	Members  []string `json:"members"`   // node IDs
-	Files    []string `json:"files"`     // unique file paths
-	Size     int      `json:"size"`      // member count
-	Cohesion float64  `json:"cohesion"`  // internal edge density (0-1)
+	Members  []string `json:"members"`  // node IDs
+	Files    []string `json:"files"`    // unique file paths
+	Size     int      `json:"size"`     // member count
+	Cohesion float64  `json:"cohesion"` // internal edge density (0-1)
 }
 
 // CommunityResult is the output of community detection.
 type CommunityResult struct {
-	Communities []Community `json:"communities"`
+	Communities []Community       `json:"communities"`
 	NodeToComm  map[string]string `json:"node_to_community"` // nodeID → communityID
-	Modularity  float64     `json:"modularity"`
+	Modularity  float64           `json:"modularity"`
 }
 
 // DetectCommunities runs Louvain community detection on the graph.
@@ -88,7 +88,7 @@ func DetectCommunities(g *graph.Graph) *CommunityResult {
 	}
 
 	// Louvain Phase 1: local moves
-	comm := make(map[string]string)    // nodeID → communityID
+	comm := make(map[string]string)        // nodeID → communityID
 	commNodes := make(map[string][]string) // communityID → nodeIDs
 	for id := range symbolNodes {
 		comm[id] = id

@@ -36,7 +36,7 @@ type GraphChangeEvent struct {
 
 // Watcher keeps the knowledge graph in live sync with the filesystem.
 type Watcher struct {
-	indexer    *Indexer
+	indexer   *Indexer
 	fsw       *fsnotify.Watcher
 	config    config.WatchConfig
 	events    chan GraphChangeEvent
@@ -65,7 +65,7 @@ func NewWatcher(idx *Indexer, cfg config.WatchConfig, logger *zap.Logger) (*Watc
 	cfg.DebounceMs = debounce
 
 	return &Watcher{
-		indexer:  idx,
+		indexer: idx,
 		fsw:     fsw,
 		config:  cfg,
 		events:  make(chan GraphChangeEvent, 64),

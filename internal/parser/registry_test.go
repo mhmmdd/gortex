@@ -13,7 +13,7 @@ type mockExtractor struct {
 	exts []string
 }
 
-func (m *mockExtractor) Language() string    { return m.lang }
+func (m *mockExtractor) Language() string     { return m.lang }
 func (m *mockExtractor) Extensions() []string { return m.exts }
 func (m *mockExtractor) Extract(filePath string, src []byte) (*ExtractionResult, error) {
 	return &ExtractionResult{

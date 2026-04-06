@@ -210,4 +210,3 @@ var queryStatsCmd = &cobra.Command{
 		return printResult(cmd, eng.Stats())
 	},
 }
-

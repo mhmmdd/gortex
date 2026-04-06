@@ -70,22 +70,22 @@ func callTool(t *testing.T, srv *Server, name string, args map[string]any) *mcpl
 func findAndCallHandler(srv *Server, name string, ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	// Map tool names to handlers.
 	handlers := map[string]func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error){
-		"graph_stats":          srv.handleGraphStats,
-		"search_symbols":       srv.handleSearchSymbols,
-		"get_symbol":           srv.handleGetSymbol,
-		"get_file_summary":     srv.handleGetFileSummary,
-		"get_dependencies":     srv.handleGetDependencies,
-		"get_dependents":       srv.handleGetDependents,
-		"get_call_chain":       srv.handleGetCallChain,
-		"get_callers":          srv.handleGetCallers,
-		"find_implementations": srv.handleFindImplementations,
-		"find_usages":          srv.handleFindUsages,
-		"get_cluster":          srv.handleGetCluster,
-		"get_editing_context":  srv.handleGetEditingContext,
-		"get_symbol_signature": srv.handleGetSymbolSignature,
-		"find_import_path":     srv.handleFindImportPath,
+		"graph_stats":           srv.handleGraphStats,
+		"search_symbols":        srv.handleSearchSymbols,
+		"get_symbol":            srv.handleGetSymbol,
+		"get_file_summary":      srv.handleGetFileSummary,
+		"get_dependencies":      srv.handleGetDependencies,
+		"get_dependents":        srv.handleGetDependents,
+		"get_call_chain":        srv.handleGetCallChain,
+		"get_callers":           srv.handleGetCallers,
+		"find_implementations":  srv.handleFindImplementations,
+		"find_usages":           srv.handleFindUsages,
+		"get_cluster":           srv.handleGetCluster,
+		"get_editing_context":   srv.handleGetEditingContext,
+		"get_symbol_signature":  srv.handleGetSymbolSignature,
+		"find_import_path":      srv.handleFindImportPath,
 		"explain_change_impact": srv.handleEnhancedChangeImpact,
-		"get_recent_changes":   srv.handleGetRecentChanges,
+		"get_recent_changes":    srv.handleGetRecentChanges,
 	}
 	h, ok := handlers[name]
 	if !ok {

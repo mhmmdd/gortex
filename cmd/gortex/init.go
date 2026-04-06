@@ -209,10 +209,10 @@ Use these for guided workflows: ` + "`/gortex-guide`" + `, ` + "`/gortex-explore
 `
 
 var commands = map[string]string{
-	"gortex-guide.md": commandGuide,
-	"gortex-explore.md": commandExplore,
-	"gortex-debug.md": commandDebug,
-	"gortex-impact.md": commandImpact,
+	"gortex-guide.md":    commandGuide,
+	"gortex-explore.md":  commandExplore,
+	"gortex-debug.md":    commandDebug,
+	"gortex-impact.md":   commandImpact,
 	"gortex-refactor.md": commandRefactor,
 }
 

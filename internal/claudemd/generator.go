@@ -10,10 +10,7 @@ import (
 )
 
 // Generate produces a CLAUDE.md block describing the indexed codebase and how to use Gortex tools.
-func Generate(engine *query.Engine, maxLines int) string {
-	if maxLines <= 0 {
-		maxLines = 180
-	}
+func Generate(engine *query.Engine, _ int) string {
 
 	stats := engine.Stats()
 	var b strings.Builder

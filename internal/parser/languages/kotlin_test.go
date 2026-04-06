@@ -240,4 +240,3 @@ fun greet(name: String) {
 	assert.True(t, targets["unresolved::*.println"], "missing println call")
 	assert.True(t, targets["unresolved::*.greet"], "missing greet call")
 }
-

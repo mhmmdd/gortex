@@ -83,8 +83,8 @@ func NewGoExtractor() *GoExtractor {
 	return &GoExtractor{lang: golang.GetLanguage()}
 }
 
-func (e *GoExtractor) Language() string      { return "go" }
-func (e *GoExtractor) Extensions() []string  { return []string{".go"} }
+func (e *GoExtractor) Language() string     { return "go" }
+func (e *GoExtractor) Extensions() []string { return []string{".go"} }
 
 func (e *GoExtractor) Extract(filePath string, src []byte) (*parser.ExtractionResult, error) {
 	tree, err := parser.ParseFile(src, e.lang)

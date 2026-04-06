@@ -11,18 +11,18 @@ import (
 // Process represents a discovered execution flow in the codebase.
 type Process struct {
 	ID         string   `json:"id"`
-	Name       string   `json:"name"`       // human-readable name
+	Name       string   `json:"name"`        // human-readable name
 	EntryPoint string   `json:"entry_point"` // node ID of the entry function
 	Steps      []string `json:"steps"`       // ordered node IDs in the flow
 	StepCount  int      `json:"step_count"`
-	Files      []string `json:"files"`       // unique files touched
-	Score      float64  `json:"score"`       // entry point confidence score
+	Files      []string `json:"files"` // unique files touched
+	Score      float64  `json:"score"` // entry point confidence score
 }
 
 // ProcessResult is the output of process discovery.
 type ProcessResult struct {
-	Processes    []Process         `json:"processes"`
-	NodeToProcs  map[string][]string `json:"node_to_processes"` // nodeID → process IDs
+	Processes   []Process           `json:"processes"`
+	NodeToProcs map[string][]string `json:"node_to_processes"` // nodeID → process IDs
 }
 
 // DiscoverProcesses finds execution flows by identifying entry points and tracing forward.
@@ -31,8 +31,8 @@ func DiscoverProcesses(g *graph.Graph) *ProcessResult {
 	edges := g.AllEdges()
 
 	// Build call graph adjacency (forward only)
-	callees := make(map[string][]string)  // who does this function call?
-	callers := make(map[string][]string)  // who calls this function?
+	callees := make(map[string][]string) // who does this function call?
+	callers := make(map[string][]string) // who calls this function?
 
 	for _, e := range edges {
 		if e.Kind == graph.EdgeCalls {

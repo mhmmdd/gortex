@@ -285,4 +285,3 @@ func (s *Server) handleGetCluster(_ context.Context, req mcp.CallToolRequest) (*
 func (s *Server) handleGraphStats(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return mcp.NewToolResultJSON(s.engine.Stats())
 }
-

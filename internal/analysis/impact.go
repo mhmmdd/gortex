@@ -28,13 +28,13 @@ type ImpactEntry struct {
 
 // ImpactResult is the output of risk-tiered impact analysis.
 type ImpactResult struct {
-	Risk               RiskLevel              `json:"risk"`
-	Summary            string                 `json:"summary"`
-	ByDepth            map[int][]ImpactEntry  `json:"by_depth"`
-	AffectedProcesses  []string               `json:"affected_processes,omitempty"`
+	Risk                RiskLevel             `json:"risk"`
+	Summary             string                `json:"summary"`
+	ByDepth             map[int][]ImpactEntry `json:"by_depth"`
+	AffectedProcesses   []string              `json:"affected_processes,omitempty"`
 	AffectedCommunities []string              `json:"affected_communities,omitempty"`
-	TestFiles          []string               `json:"test_files,omitempty"`
-	TotalAffected      int                    `json:"total_affected"`
+	TestFiles           []string              `json:"test_files,omitempty"`
+	TotalAffected       int                   `json:"total_affected"`
 }
 
 // AnalyzeImpact performs depth-tiered blast radius analysis on a set of symbols.

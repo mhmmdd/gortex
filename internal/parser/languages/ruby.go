@@ -309,4 +309,3 @@ func isUpperASCII(b byte) bool {
 
 // Ensure RubyExtractor satisfies the Extractor interface at compile time.
 var _ parser.Extractor = (*RubyExtractor)(nil)
-

@@ -263,8 +263,7 @@ func (s *Server) handleGetRecentChanges(_ context.Context, req mcp.CallToolReque
 	}
 
 	return mcp.NewToolResultJSON(map[string]any{
-		"changes":              changes,
+		"changes":             changes,
 		"graph_current_as_of": time.Now().Format(time.RFC3339),
 	})
 }
-
