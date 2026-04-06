@@ -9,4 +9,6 @@ func RegisterAll(reg *parser.Registry) {
 	reg.Register(NewPythonExtractor())
 	reg.Register(NewRustExtractor())
 	reg.Register(NewJavaExtractor())
+	reg.Register(NewRubyExtractor())
+	reg.Register(NewElixirExtractor())
 }
