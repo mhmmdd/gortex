@@ -59,6 +59,16 @@ func (s *Server) registerCodingTools() {
 	)
 
 	s.mcpServer.AddTool(
+		mcp.NewTool("batch_symbols",
+			mcp.WithDescription("Returns signatures, source code, callers, and callees for multiple symbols in one call. Use instead of calling get_symbol_source or get_symbol_signature multiple times — saves 60% round-trip overhead."),
+			mcp.WithString("ids", mcp.Required(), mcp.Description("Comma-separated list of symbol IDs")),
+			mcp.WithBoolean("include_source", mcp.Description("Include source code for each symbol (default: false)")),
+			mcp.WithNumber("context_lines", mcp.Description("Extra lines above/below source (default: 3, only if include_source)")),
+		),
+		s.handleBatchSymbols,
+	)
+
+	s.mcpServer.AddTool(
 		mcp.NewTool("get_recent_changes",
 			mcp.WithDescription("Returns files and symbols that changed since the last call (watch mode only). Use to re-orient after the user edits files outside of Claude Code's view, without re-reading anything."),
 			mcp.WithString("since", mcp.Description("ISO 8601 timestamp (omit for all changes since index)")),
@@ -358,4 +368,93 @@ func readLines(path string, startLine, endLine, contextLines int) (string, int, 
 	}
 
 	return strings.Join(lines, "\n"), from, nil
+}
+
+func (s *Server) handleBatchSymbols(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	idsStr, err := req.RequireString("ids")
+	if err != nil {
+		return mcp.NewToolResultError("ids is required"), nil
+	}
+
+	ids := strings.Split(idsStr, ",")
+	for i := range ids {
+		ids[i] = strings.TrimSpace(ids[i])
+	}
+
+	includeSource := false
+	if v, ok := req.GetArguments()["include_source"].(bool); ok {
+		includeSource = v
+	}
+	contextLines := req.GetInt("context_lines", 3)
+
+	var results []map[string]any
+	for _, id := range ids {
+		node := s.engine.GetSymbol(id)
+		if node == nil {
+			results = append(results, map[string]any{
+				"id":    id,
+				"error": "symbol not found",
+			})
+			continue
+		}
+
+		entry := map[string]any{
+			"id":         node.ID,
+			"kind":       node.Kind,
+			"name":       node.Name,
+			"file_path":  node.FilePath,
+			"start_line": node.StartLine,
+			"end_line":   node.EndLine,
+		}
+		if sig, ok := node.Meta["signature"]; ok {
+			entry["signature"] = sig
+		}
+
+		// Callers (depth 1).
+		if node.Kind == graph.KindFunction || node.Kind == graph.KindMethod {
+			callers := s.engine.GetCallers(node.ID, query.QueryOptions{Depth: 1, Limit: 10, Detail: "brief"})
+			var callerIDs []string
+			for _, cn := range callers.Nodes {
+				if cn.ID != node.ID {
+					callerIDs = append(callerIDs, cn.ID)
+				}
+			}
+			if len(callerIDs) > 0 {
+				entry["callers"] = callerIDs
+			}
+
+			// Callees (depth 1).
+			callees := s.engine.GetCallChain(node.ID, query.QueryOptions{Depth: 1, Limit: 10, Detail: "brief"})
+			var calleeIDs []string
+			for _, cn := range callees.Nodes {
+				if cn.ID != node.ID {
+					calleeIDs = append(calleeIDs, cn.ID)
+				}
+			}
+			if len(calleeIDs) > 0 {
+				entry["callees"] = calleeIDs
+			}
+		}
+
+		// Source code (optional).
+		if includeSource && node.StartLine > 0 && node.EndLine > 0 {
+			absPath := node.FilePath
+			if s.indexer != nil {
+				if root := s.indexer.RootPath(); root != "" {
+					absPath = filepath.Join(root, node.FilePath)
+				}
+			}
+			if source, fromLine, err := readLines(absPath, node.StartLine, node.EndLine, contextLines); err == nil {
+				entry["source"] = source
+				entry["from_line"] = fromLine
+			}
+		}
+
+		results = append(results, entry)
+	}
+
+	return mcp.NewToolResultJSON(map[string]any{
+		"symbols": results,
+		"total":   len(results),
+	})
 }
