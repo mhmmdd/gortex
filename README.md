@@ -10,11 +10,13 @@ Built for AI coding agents (Claude Code, Cursor, Codex) — one `smart_context` 
 ## Features
 
 - **Knowledge graph** — every file, symbol, import, call chain, and type relationship in one queryable structure
+- **Multi-repo workspaces** — index multiple repositories into a single graph with cross-repo symbol resolution, project grouping, reference tags, and per-repo scoping
 - **25 languages** — Go, TypeScript, JavaScript, Python, Rust, Java, C#, Kotlin, Swift, Scala, PHP, Ruby, Elixir, C, C++, Bash, SQL, Protobuf, Markdown, HTML, CSS, YAML, TOML, HCL, Dockerfile
-- **40 MCP tools** — symbol lookup, call chains, blast radius, community detection, process discovery, contract verification, cycle detection, dead code analysis, scaffolding, and 6 agent-optimized tools
+- **44 MCP tools** — symbol lookup, call chains, blast radius, community detection, process discovery, contract verification, cycle detection, dead code analysis, scaffolding, multi-repo management, and 6 agent-optimized tools
 - **6 MCP resources** — lightweight graph context without tool calls
+- **Two-tier config** — global config (`~/.config/gortex/config.yaml`) for projects and repo lists, per-repo `.gortex.yaml` for guards, excludes, and local overrides
 - **Guard rules** — project-specific constraints (co-change, boundary) enforced via `check_guards`
-- **Watch mode** — surgical graph updates on file change, live sync with agents
+- **Watch mode** — surgical graph updates on file change across all tracked repos, live sync with agents
 - **Web UI** — Sigma.js force-directed visualization with node size proportional to importance
 - **IMPLEMENTS inference** — structural interface satisfaction for Go, TypeScript, Java, Rust, C#, Scala, Swift, Protobuf
 - **PreToolUse hooks** — automatic graph context injection on Read and Grep
@@ -38,6 +40,11 @@ gortex status --index /path/to/repo
 
 # Start MCP server with watch mode
 gortex serve --index /path/to/repo --watch
+
+# Multi-repo: track additional repos and set active project
+gortex serve --index /path/to/repo --track /path/to/other-repo --project my-project
+gortex track /path/to/another-repo
+gortex untrack /path/to/another-repo
 ```
 
 ## Usage with Claude Code
@@ -48,6 +55,71 @@ After running `gortex init`, Claude Code automatically starts Gortex via `.mcp.j
 - **Global skills:** installed to `~/.claude/skills/` — available across all repos
 - **PreToolUse hook:** automatic graph context on Read/Grep calls
 - **CLAUDE.md instructions:** mandatory tool usage table and session workflow
+
+## Multi-Repo Workspaces
+
+Gortex can index multiple repositories into a single shared graph, enabling cross-repo symbol resolution, impact analysis, and navigation.
+
+### Configuration
+
+Two-tier config hierarchy:
+
+- **Global config** (`~/.config/gortex/config.yaml`) — projects, repo lists, active project, reference tags
+- **Workspace config** (`.gortex.yaml` per repo) — guards, excludes, local overrides (workspace wins when both define the same setting)
+
+```yaml
+# ~/.config/gortex/config.yaml
+active_project: my-saas
+
+repos:
+  - path: /home/user/projects/gortex
+    name: gortex
+
+projects:
+  my-saas:
+    repos:
+      - path: /home/user/projects/frontend
+        name: frontend
+        ref: work
+      - path: /home/user/projects/backend
+        name: backend
+        ref: work
+      - path: /home/user/projects/shared-lib
+        name: shared-lib
+        ref: opensource
+```
+
+### CLI
+
+```bash
+gortex track /path/to/repo          # Add a repo to the workspace
+gortex untrack /path/to/repo        # Remove a repo from the workspace
+gortex serve --track /path/to/repo  # Track additional repos on startup
+gortex serve --project my-saas      # Set active project scope
+gortex index repo-a/ repo-b/        # Index multiple repos
+gortex status                       # Per-repo and per-project stats
+```
+
+### MCP Tools
+
+Agents can manage repos at runtime without CLI access:
+
+| Tool | Description |
+|------|-------------|
+| `track_repository` | Add a repo, index immediately, persist to config |
+| `untrack_repository` | Remove a repo, evict nodes/edges, persist to config |
+| `set_active_project` | Switch project scope for all subsequent queries |
+| `get_active_project` | Return current project name and repo list |
+
+All query tools (`search_symbols`, `get_symbol`, `find_usages`, `get_file_summary`, `get_call_chain`, `smart_context`) accept optional `repo`, `project`, and `ref` parameters for scoping. When an active project is set, it applies as the default scope.
+
+### How It Works
+
+- **Qualified Node IDs** — in multi-repo mode, IDs become `<repo_prefix>/<path>::<Symbol>` (e.g., `frontend/src/app.ts::App`). Single-repo mode keeps the existing `<path>::<Symbol>` format.
+- **Cross-repo edges** — the resolver links symbols across repo boundaries with same-repo preference. Cross-repo edges carry a `cross_repo: true` flag.
+- **Impact analysis** — `explain_change_impact`, `verify_change`, and `get_test_targets` follow cross-repo edges automatically, grouping results by repository.
+- **Shared repos** — the same repo can appear in multiple projects with different reference tags. It's indexed once and shared across projects.
+- **Auto-detection** — set `workspace.auto_detect: true` in `.gortex.yaml` to auto-discover Git repos in a parent directory.
 
 ## Usage with Kiro
 
@@ -65,8 +137,10 @@ After running `gortex init`, Claude Code automatically starts Gortex via `.mcp.j
 ```
 gortex init [path]           Set up Gortex for a project + install global skills
 gortex serve [flags]         Start the MCP server
-gortex index [path]          Index a repository and print stats
-gortex status [flags]        Show index status
+gortex index [path...]       Index one or more repositories and print stats
+gortex status [flags]        Show index status (per-repo and per-project in multi-repo mode)
+gortex track <path>          Add a repository to the tracked workspace
+gortex untrack <path>        Remove a repository from the tracked workspace
 gortex query <subcommand>    Query the knowledge graph
 gortex clean                 Remove Gortex files from a project
 gortex claude-md [flags]     Generate CLAUDE.md block
@@ -88,15 +162,15 @@ gortex query stats                      Show graph statistics
 
 All query commands support `--format text|json|dot` (DOT output for Graphviz visualization).
 
-## MCP Tools (40)
+## MCP Tools (44)
 
 ### Core Navigation
 | Tool | Description |
 |------|-------------|
-| `graph_stats` | Node/edge counts by kind and language |
-| `search_symbols` | Find symbols by name (replaces Grep) |
-| `get_symbol` | Symbol location and signature (replaces Read) |
-| `get_file_summary` | All symbols and imports in a file |
+| `graph_stats` | Node/edge counts by kind, language, and per-repo stats |
+| `search_symbols` | Find symbols by name (replaces Grep). Accepts `repo`, `project`, `ref` params |
+| `get_symbol` | Symbol location and signature (replaces Read). Accepts `repo`, `project`, `ref` params |
+| `get_file_summary` | All symbols and imports in a file. Accepts `repo`, `project`, `ref` params |
 | `get_editing_context` | **Primary pre-edit tool** — symbols, signatures, callers, callees |
 
 ### Graph Traversal
@@ -162,6 +236,14 @@ All query commands support `--format text|json|dot` (DOT output for Graphviz vis
 | `diff_context` | Git diff enriched with callers, callees, community, processes, per-file risk |
 | `prefetch_context` | Predict needed symbols from task description and recent activity |
 
+### Multi-Repo Management
+| Tool | Description |
+|------|-------------|
+| `track_repository` | Add a repo at runtime — indexes immediately, persists to global config |
+| `untrack_repository` | Remove a repo — evicts nodes/edges, persists to global config |
+| `set_active_project` | Switch active project scope for all subsequent queries |
+| `get_active_project` | Return current project name and its member repositories |
+
 ## MCP Resources (6)
 
 | Resource | Description |
@@ -188,24 +270,28 @@ When running `gortex serve`, a web visualization is available at `http://localho
 
 ```
 gortex binary
-  CLI (cobra)  ──> Indexer ──> In-Memory Graph
-  MCP Server ─────────────────> Query Engine
-  Web Server ─────────────────> (Nodes + Edges + Indexes)
-                   Watcher <── filesystem events (fsnotify)
+  CLI (cobra)  ──> MultiIndexer ──> In-Memory Graph (shared, per-repo indexed)
+  MCP Server ──────────────────────> Query Engine (repo/project/ref scoping)
+  Web Server ──────────────────────> (Nodes + Edges + byRepo index)
+                   MultiWatcher <── filesystem events (fsnotify, per-repo)
+                   CrossRepoResolver ──> cross-repo edge creation
 ```
 
 **Data flow:**
-1. Indexer walks the directory, dispatches files to language-specific extractors (tree-sitter)
+1. MultiIndexer walks each repo directory concurrently, dispatches files to language-specific extractors (tree-sitter)
 2. Extractors produce nodes (files, functions, types, etc.) and edges (calls, imports, defines, etc.)
-3. Resolver links cross-file references and infers interface implementations
-4. Query Engine answers traversal queries over the live graph
-5. Watcher detects changes and surgically patches the graph (debounced per-file)
+3. In multi-repo mode, nodes get `RepoPrefix` and IDs become `<repo_prefix>/<path>::<Symbol>`
+4. Resolver links cross-file references; CrossRepoResolver links cross-repo references with same-repo preference
+5. Query Engine answers traversal queries with optional repo/project/ref scoping
+6. MultiWatcher detects changes per-repo and surgically patches the graph (debounced per-file), then re-resolves cross-repo edges
 
 ## Graph Schema
 
 **Node kinds:** `file`, `function`, `method`, `type`, `interface`, `variable`, `import`, `package`
 
 **Edge kinds:** `calls`, `imports`, `defines`, `implements`, `extends`, `references`, `member_of`, `instantiates`
+
+**Multi-repo fields:** Nodes carry `repo_prefix` (empty in single-repo mode). Edges carry `cross_repo` (true when connecting nodes in different repos). Node IDs use `<repo_prefix>/<path>::<Symbol>` format in multi-repo mode.
 
 ## Language Support (25 languages)
 
