@@ -445,6 +445,13 @@ func (s *Server) registerCoreTools() {
 	)
 
 	s.mcpServer.AddTool(
+		mcp.NewTool("get_repo_outline",
+			mcp.WithDescription("Narrative single-call overview of the indexed codebase: primary languages, top communities, load-bearing hotspots, most-imported files, and entry points. Use at session start (or when onboarding to an unfamiliar repo) instead of assembling this from graph_stats + analyze + manual inspection. Output stays under ~1k tokens."),
+		),
+		s.handleGetRepoOutline,
+	)
+
+	s.mcpServer.AddTool(
 		mcp.NewTool("graph_stats",
 			mcp.WithDescription("Returns a compact summary of the indexed codebase: node/edge counts by kind and language. Call at session start to orient Claude in an unfamiliar repo."),
 		),
