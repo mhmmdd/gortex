@@ -110,7 +110,7 @@ type tokenStats struct {
 }
 
 // record adds a single savings observation.
-// returned and fullFile are token estimates (chars / 4).
+// returned and fullFile are token counts (cl100k_base via internal/tokens).
 func (ts *tokenStats) record(returned, fullFile int64) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()

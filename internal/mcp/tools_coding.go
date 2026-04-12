@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/query"
+	"github.com/zzet/gortex/internal/tokens"
 )
 
 func (s *Server) registerCodingTools() {
@@ -377,8 +378,8 @@ func (s *Server) handleGetSymbolSource(_ context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(fmt.Sprintf("could not read source: %v", err)), nil
 	}
 
-	returned := int64(len(source)) / 4
-	fullFile := int64(totalFileChars) / 4
+	returned := tokens.CountInt64(source)
+	fullFile := int64(tokens.EstimateFromSample(totalFileChars, source))
 	s.tokenStats.record(returned, fullFile)
 	tokensSaved := fullFile - returned
 	if tokensSaved < 0 {
@@ -523,8 +524,8 @@ func (s *Server) handleBatchSymbols(_ context.Context, req mcp.CallToolRequest) 
 			if source, fromLine, totalFileChars, err := readLines(absPath, node.StartLine, node.EndLine, contextLines); err == nil {
 				entry["source"] = source
 				entry["from_line"] = fromLine
-				returned := int64(len(source)) / 4
-				fullFile := int64(totalFileChars) / 4
+				returned := tokens.CountInt64(source)
+				fullFile := int64(tokens.EstimateFromSample(totalFileChars, source))
 				saved := fullFile - returned
 				if saved < 0 {
 					saved = 0
@@ -1138,8 +1139,8 @@ func (s *Server) handleSmartContext(_ context.Context, req mcp.CallToolRequest) 
 			}
 			if source, _, totalFileChars, err := readLines(absPath, sym.StartLine, sym.EndLine, 0); err == nil {
 				entry["source"] = source
-				returned := int64(len(source)) / 4
-				fullFile := int64(totalFileChars) / 4
+				returned := tokens.CountInt64(source)
+				fullFile := int64(tokens.EstimateFromSample(totalFileChars, source))
 				saved := fullFile - returned
 				if saved < 0 {
 					saved = 0

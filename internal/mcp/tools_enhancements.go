@@ -17,6 +17,7 @@ import (
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/persistence"
 	"github.com/zzet/gortex/internal/query"
+	"github.com/zzet/gortex/internal/tokens"
 	"go.uber.org/zap"
 )
 
@@ -1790,7 +1791,8 @@ func (s *Server) handleExportContext(ctx context.Context, req mcp.CallToolReques
 // markdown briefing suitable for sharing outside MCP.
 func renderContextMarkdown(data map[string]any, tokenBudget int) string {
 	var sb strings.Builder
-	charBudget := tokenBudget * 4 // rough token-to-char ratio
+	// Conservative char budget calibrated for cl100k_base on code-heavy input.
+	charBudget := tokens.TokensToChars(tokenBudget)
 
 	// Header.
 	task, _ := data["task"].(string)

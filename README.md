@@ -476,7 +476,7 @@ Gortex tracks how many tokens it saves compared to naive file reads, both per-ca
   - `tokens_saved` — total tokens avoided vs full file reads
   - `efficiency_ratio` — multiplier (e.g., 23x means 23x fewer tokens than reading whole files)
 
-Token estimates use `chars / 4` as a standard approximation.
+Token counts use **tiktoken (`cl100k_base`)** — the tokenizer Claude and GPT-4 actually use — via `github.com/pkoukk/tiktoken-go` with an embedded offline BPE loader, so no runtime downloads. The BPE is lazy-loaded on first call. If init fails for any reason, the package falls back to the legacy `chars/4` heuristic so metrics stay usable.
 
 ## Graph Persistence
 
