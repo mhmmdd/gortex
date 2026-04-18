@@ -54,12 +54,21 @@ func BackendSize(b Backend) uint64 {
 
 // AutoThreshold is the symbol count above which BleveBackend is used.
 // Calibrated against real daemon runs: Bleve (upsidedown + gtreap) costs
-// ~32 KiB per document live, so a 65k-symbol upgrade previously added
-// ~2 GiB of heap. BM25 stays plenty fast up to several hundred thousand
-// symbols, so the threshold is raised to keep everyone off Bleve until
-// they really need it. Users can still force Bleve via
-// GORTEX_BLEVE_DISK_DIR (disk-backed scorch, 10-20× smaller heap).
-const AutoThreshold = 200000
+// ~32 KiB per document live, so a 500k-doc in-memory Bleve would cost
+// ~16 GiB of heap — painful but not catastrophic on a dev machine with
+// a real code monorepo that has earned it. BM25 stays plenty fast at
+// that size (roughly 450 MiB at ~900 B/doc), so the threshold is set
+// to match the point where BM25 query quality starts to trail Bleve's
+// richer tokenization and phrase support, not the point where BM25
+// runs out of speed. Users who cross the line and can't afford the
+// in-memory cost should set GORTEX_BLEVE_DISK_DIR (disk-backed scorch,
+// 10-20× smaller heap at the cost of file I/O).
+//
+// Declared as a var rather than a const so tests that exercise the
+// auto-upgrade path (idempotency, single-fire gating) can drop it to
+// a small value without having to seed a huge corpus. Production
+// code never writes to it.
+var AutoThreshold = 500000
 
 // NewAuto creates a BM25Backend initially. Call Upgrade() after indexing
 // if the count exceeds AutoThreshold and multi-repo mode is desired.

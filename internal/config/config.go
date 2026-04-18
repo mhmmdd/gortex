@@ -2,6 +2,7 @@ package config
 
 import (
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -39,6 +40,20 @@ type SemanticConfig struct {
 	// searched by literal name, so paying the embedding + HNSW cost
 	// buys nothing. See excludes.DefaultSkipEmbed for the baseline.
 	SkipEmbed []SkipEmbedRule `mapstructure:"skip_embed" yaml:"skip_embed,omitempty"`
+
+	// SkipSearch lists (language, kind) combinations that should be
+	// kept in the graph but excluded from the text search index
+	// (BM25/Bleve). Same shape as SkipEmbed but targets a different
+	// index. The motivating case: a big monorepo with ~135k JSON
+	// `variable` nodes (package.json keys, tsconfig entries, etc.)
+	// pushed total symbol count over search.AutoThreshold and
+	// triggered an auto-upgrade from BM25 (~900 B/doc) to Bleve
+	// (~32 KiB/doc). Those config-key nodes aren't useful search
+	// targets — users who want to find them by name still can via
+	// graph queries. Defaults are a superset of SkipEmbed because
+	// anything that isn't worth embedding usually isn't worth
+	// full-text-indexing either. See DefaultSkipSearch.
+	SkipSearch []SkipEmbedRule `mapstructure:"skip_search" yaml:"skip_search,omitempty"`
 }
 
 // SkipEmbedRule says: when a node's Language matches Language AND its
@@ -52,14 +67,24 @@ type SkipEmbedRule struct {
 // falls under any rule in the list. Matching is case-sensitive and
 // exact — parser output is canonical already.
 func ShouldSkipEmbed(rules []SkipEmbedRule, language, kind string) bool {
+	return matchesSkipRule(rules, language, kind)
+}
+
+// ShouldSkipSearch reports whether a node of the given (language, kind)
+// falls under any text-index skip rule. Same matching semantics as
+// ShouldSkipEmbed — kept as a distinct function so callers make the
+// embed/search distinction explicit, and so the two defaults can
+// diverge over time.
+func ShouldSkipSearch(rules []SkipEmbedRule, language, kind string) bool {
+	return matchesSkipRule(rules, language, kind)
+}
+
+// matchesSkipRule is the shared (language, kind) matcher for SkipEmbed
+// and SkipSearch. Case-sensitive and exact; parser output is canonical.
+func matchesSkipRule(rules []SkipEmbedRule, language, kind string) bool {
 	for _, r := range rules {
-		if r.Language != language {
-			continue
-		}
-		for _, k := range r.Kinds {
-			if k == kind {
-				return true
-			}
+		if r.Language == language && slices.Contains(r.Kinds, kind) {
+			return true
 		}
 	}
 	return false
@@ -81,6 +106,33 @@ func DefaultSkipEmbed() []SkipEmbedRule {
 		// Shell variables are nearly always noise for semantic search.
 		{Language: "bash", Kinds: []string{"variable"}},
 	}
+}
+
+// DefaultSkipSearch returns the baseline (language, kind) pairs that
+// are kept out of the text search index. Superset of DefaultSkipEmbed:
+// if a node isn't worth a vector slot it generally isn't worth a BM25/
+// Bleve slot either, and on big monorepos these config-key nodes are
+// what pushes the backend into its Bleve auto-upgrade (~32 KiB/doc).
+// JSON is the heaviest of the additions — tsconfig / package.json /
+// lockfile keys alone can account for >100k variable nodes.
+func DefaultSkipSearch() []SkipEmbedRule {
+	rules := DefaultSkipEmbed()
+	rules = append(rules,
+		// Object keys — searched by exact path, not full-text.
+		SkipEmbedRule{Language: "json", Kinds: []string{"variable"}},
+		// Template/markup variables — too noisy to index by name.
+		SkipEmbedRule{Language: "liquid", Kinds: []string{"variable"}},
+		SkipEmbedRule{Language: "jinja", Kinds: []string{"variable"}},
+		// Markdown variables are headings captured by the parser —
+		// heading text already lives in the graph as file structure;
+		// full-text-indexing it adds noise without recall.
+		SkipEmbedRule{Language: "markdown", Kinds: []string{"variable"}},
+		// Build-system variables (Makefile/Dockerfile ARG/ENV) are
+		// typically searched by literal name, not concept.
+		SkipEmbedRule{Language: "makefile", Kinds: []string{"variable"}},
+		SkipEmbedRule{Language: "dockerfile", Kinds: []string{"variable"}},
+	)
+	return rules
 }
 
 // SemanticProviderConfig configures a single semantic provider.
@@ -125,6 +177,12 @@ type IndexConfig struct {
 	// through the same struct it already receives. Surface it to users
 	// under semantic.skip_embed, not under index.
 	SkipEmbed []SkipEmbedRule `mapstructure:"-" yaml:"-"`
+	// SkipSearch is the effective text-index skip rules resolved from
+	// Semantic.SkipSearch, same propagation pattern as SkipEmbed.
+	// Users configure this under semantic.skip_search; the indexer
+	// reads it here. Controls what goes into BM25/Bleve — unlike
+	// SkipEmbed it doesn't affect the graph or vector index.
+	SkipSearch []SkipEmbedRule `mapstructure:"-" yaml:"-"`
 	// MaxFileSize skips files larger than this during indexing. Zero
 	// (the default) disables the cap — full coverage is preferred so
 	// generated code like `*.pb.go`, schema files, and large data
@@ -205,6 +263,7 @@ func Default() *Config {
 			EnrichOnWatch:   false,
 			WatchDebounceMs: 500,
 			SkipEmbed:       DefaultSkipEmbed(),
+			SkipSearch:      DefaultSkipSearch(),
 		},
 	}
 }

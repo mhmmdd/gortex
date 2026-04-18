@@ -84,6 +84,19 @@ type Indexer struct {
 	// the dominant cost on repos with tens of thousands of source files.
 	contractCache   map[string]*contractCacheEntry
 	contractCacheMu sync.RWMutex
+
+	// upgradeOnce gates the BM25→Bleve auto-upgrade to exactly one
+	// goroutine per indexer lifetime. Without this, every post-threshold
+	// IndexCtx — which fires once per tracked repo during multi-repo
+	// warmup — would spawn a fresh upgradeSearchToBleve goroutine.
+	// Each rebuilds ~N-doc Bleve indexes (≈32 KiB/doc), so overlapping
+	// upgrades peak memory far above steady-state and waste CPU on
+	// rebuilds that the next Swap immediately discards. Also counts
+	// scheduled upgrades so tests can observe gating decisions
+	// without relying on log scrapes or timing.
+	upgradeOnce      sync.Once
+	upgradeSpawnedMu sync.Mutex
+	upgradeSpawned   int
 }
 
 // contractCacheEntry is a cached contract-extraction result for one file.
@@ -120,6 +133,24 @@ func (idx *Indexer) swappable() *search.Swappable {
 	panic("indexer: search backend is not *search.Swappable — invariant violated")
 }
 
+// shouldIndexForSearch reports whether a node should be added to the
+// text search index (BM25/Bleve). File and Import nodes are never
+// searchable symbols. Beyond that, config.SkipSearch filters out
+// (language, kind) pairs that would only add noise — JSON/YAML/TOML
+// keys, CSS tokens, Terraform blocks, shell/build variables. All three
+// text-index call sites (buildSearchIndex bulk loop, indexFile
+// incremental add, upgradeSearchToBleve repopulate) must go through
+// this predicate so they can't drift.
+func (idx *Indexer) shouldIndexForSearch(n *graph.Node) bool {
+	if n.Kind == graph.KindFile || n.Kind == graph.KindImport {
+		return false
+	}
+	if config.ShouldSkipSearch(idx.config.SkipSearch, n.Language, string(n.Kind)) {
+		return false
+	}
+	return true
+}
+
 // upgradeSearchToBleve constructs a Bleve backend from the current graph
 // and atomically swaps it in. Designed to run in a background goroutine
 // triggered by IndexCtx after the initial index completes. Does nothing
@@ -127,6 +158,22 @@ func (idx *Indexer) swappable() *search.Swappable {
 // in-memory backend keeps serving correctly, just with worse memory
 // characteristics).
 func (idx *Indexer) upgradeSearchToBleve() {
+	// Defensive early-return: if the active text backend is already
+	// Bleve, there is nothing to upgrade. IndexCtx's sync.Once guard
+	// prevents re-entry from the auto-upgrade path, but direct
+	// callers (tests, manual invocation from tooling) could still
+	// hit this function twice; a second run would pointlessly
+	// rebuild a full Bleve index and Swap it over an identical one.
+	inner := idx.swappable().Inner()
+	if _, ok := inner.(*search.BleveBackend); ok {
+		return
+	}
+	if hyb, ok := inner.(*search.HybridBackend); ok {
+		if _, ok := hyb.TextBackend().(*search.BleveBackend); ok {
+			return
+		}
+	}
+
 	// Opt-in disk backend. Scorch stores the inverted index on disk
 	// (~10-20× less heap than upsidedown+gtreap) at the cost of file
 	// I/O during build. Users point GORTEX_BLEVE_DISK_DIR at a
@@ -154,13 +201,29 @@ func (idx *Indexer) upgradeSearchToBleve() {
 	}
 
 	for _, n := range idx.graph.AllNodes() {
-		if n.Kind == graph.KindFile || n.Kind == graph.KindImport {
+		if !idx.shouldIndexForSearch(n) {
 			continue
 		}
 		sig, _ := n.Meta["signature"].(string)
 		blv.Add(n.ID, n.Name, n.FilePath, sig)
 	}
-	idx.swappable().Swap(blv)
+
+	// Preserve the vector index if one is wired up. The previous inner
+	// is normally a HybridBackend wrapping text + vector + embedder;
+	// swapping in raw Bleve would let Swap's old.Close() run on the
+	// old Hybrid, which closes only its text side (hybrid.Close) but
+	// leaves the resulting inner — raw *BleveBackend — unwrapped, so
+	// every downstream hybrid/semantic query silently degrades to
+	// BM25 until the daemon restarts. Rewrap the fresh Bleve in a new
+	// Hybrid carrying the old vector + embedder. The vector backend
+	// itself is never closed by Hybrid.Close, so it stays alive even
+	// after the old Hybrid is torn down by Swap.
+	sw := idx.swappable()
+	var replacement search.Backend = blv
+	if oldHybrid, ok := sw.Inner().(*search.HybridBackend); ok {
+		replacement = search.NewHybrid(blv, oldHybrid.VectorIndex(), oldHybrid.Embedder())
+	}
+	sw.Swap(replacement)
 
 	mode := "memory"
 	if blv.DiskPath() != "" {
@@ -564,9 +627,18 @@ func (idx *Indexer) IndexCtx(ctx context.Context, root string) (*IndexResult, er
 	// initial-index latency was the dominant tail. Searches against
 	// idx.search keep hitting the in-memory backend until the swap
 	// completes; nothing observes a half-built Bleve.
+	//
+	// upgradeOnce gates the spawn so multi-repo warmup, which calls
+	// IndexCtx once per tracked repo, doesn't launch one upgrade
+	// goroutine per post-threshold repo. One per indexer lifetime.
 	if idx.search.Count() >= search.AutoThreshold {
-		reporter.Report("scheduling search backend upgrade", 0, 0)
-		go idx.upgradeSearchToBleve()
+		idx.upgradeOnce.Do(func() {
+			reporter.Report("scheduling search backend upgrade", 0, 0)
+			idx.upgradeSpawnedMu.Lock()
+			idx.upgradeSpawned++
+			idx.upgradeSpawnedMu.Unlock()
+			go idx.upgradeSearchToBleve()
+		})
 	}
 
 	reporter.Report("indexing complete", int(fileCount), len(files))
@@ -646,12 +718,14 @@ func (idx *Indexer) indexFile(filePath string, resolve bool) error {
 		idx.graph.AddEdge(e)
 	}
 
-	// Add new symbols to search index.
+	// Add new symbols to search index. shouldIndexForSearch enforces
+	// the same SkipSearch filter used by the bulk and upgrade paths.
 	for _, n := range result.Nodes {
-		if n.Kind != graph.KindFile && n.Kind != graph.KindImport {
-			sig, _ := n.Meta["signature"].(string)
-			idx.search.Add(n.ID, n.Name, n.FilePath, sig)
+		if !idx.shouldIndexForSearch(n) {
+			continue
 		}
+		sig, _ := n.Meta["signature"].(string)
+		idx.search.Add(n.ID, n.Name, n.FilePath, sig)
 	}
 
 	if resolve {
@@ -699,9 +773,11 @@ func (idx *Indexer) EvictFile(filePath string) (int, int) {
 func (idx *Indexer) buildSearchIndex() {
 	nodes := idx.graph.AllNodes()
 
-	// Build text index.
+	// Build text index. The SkipSearch filter (wired through
+	// idx.shouldIndexForSearch) drops config-key-style variable nodes
+	// that would only pad the index — see docs on IndexConfig.SkipSearch.
 	for _, n := range nodes {
-		if n.Kind == graph.KindFile || n.Kind == graph.KindImport {
+		if !idx.shouldIndexForSearch(n) {
 			continue
 		}
 		sig, _ := n.Meta["signature"].(string)
