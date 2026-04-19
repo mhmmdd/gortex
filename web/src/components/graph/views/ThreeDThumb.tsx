@@ -4,24 +4,6 @@ import type { ThreeDMode } from './Graph3D'
 
 export function ThreeDThumb({ mode }: { mode: ThreeDMode }) {
   const common = { viewBox: '0 0 56 40', width: 56, height: 40 }
-  if (mode === 'skyline')
-    return (
-      <svg {...common}>
-        <path d="M4 30 L28 22 L52 30 L28 38 Z" fill="var(--line-1)" stroke="var(--line-2)" strokeWidth="0.6" />
-        {[10, 18, 26, 34, 42].map((x, i) => (
-          <line
-            key={i}
-            x1={x}
-            y1={30 - (i % 2 === 0 ? 4 : 2)}
-            x2={x}
-            y2={12 - i * 1.5}
-            stroke="var(--accent)"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
-        ))}
-      </svg>
-    )
   if (mode === 'strata')
     return (
       <svg {...common}>
@@ -38,18 +20,6 @@ export function ThreeDThumb({ mode }: { mode: ThreeDMode }) {
         ))}
         <line x1="22" y1="8" x2="26" y2="38" stroke="var(--pink)" strokeWidth="0.8" strokeDasharray="1 1" />
         <line x1="34" y1="8" x2="30" y2="38" stroke="var(--accent)" strokeWidth="0.6" strokeDasharray="1 1" />
-      </svg>
-    )
-  if (mode === 'orbital')
-    return (
-      <svg {...common}>
-        <ellipse cx="28" cy="20" rx="18" ry="7" fill="none" stroke="var(--line-2)" strokeWidth="0.5" />
-        <ellipse cx="28" cy="20" rx="12" ry="4.5" fill="none" stroke="var(--line-2)" strokeWidth="0.5" />
-        <ellipse cx="28" cy="20" rx="6" ry="2.2" fill="none" stroke="var(--line-2)" strokeWidth="0.5" />
-        <circle cx="28" cy="20" r="2.2" fill="var(--accent)" />
-        <circle cx="46" cy="20" r="1.4" fill="var(--accent)" />
-        <circle cx="18" cy="16" r="1.4" fill="var(--pink)" />
-        <circle cx="34" cy="24" r="1.4" fill="var(--accent)" />
       </svg>
     )
   if (mode === 'galaxies')

@@ -3,20 +3,16 @@
 import { useEffect, useState } from 'react'
 import type { Repo } from '@/lib/schema'
 import type { GraphData } from '@/lib/types'
-import { ThreeDSkyline } from './Skyline'
 import { ThreeDStrata } from './Strata'
-import { ThreeDOrbital } from './Orbital'
 import { ThreeDGalaxies } from './Galaxies'
 import { ThreeDCity } from './City'
 import { ThreeDThumb } from './ThreeDThumb'
 
-export type ThreeDMode = 'skyline' | 'strata' | 'orbital' | 'galaxies' | 'city'
+export type ThreeDMode = 'strata' | 'galaxies' | 'city'
 
 const MODES: { id: ThreeDMode; label: string; hint: string }[] = [
-  { id: 'skyline',  label: 'Skyline',  hint: 'Repos as districts · symbols as pillars' },
-  { id: 'strata',   label: 'Strata',   hint: 'Repos as planes · cross-repo rain' },
-  { id: 'orbital',  label: 'Orbital',  hint: 'Entry at core · orbits = call depth' },
   { id: 'galaxies', label: 'Galaxies', hint: 'Force-graph w/ perspective depth' },
+  { id: 'strata',   label: 'Strata',   hint: 'Repos as planes · cross-repo rain' },
   { id: 'city',     label: 'City',     hint: 'Buildings = symbols · skybridges = contracts' },
 ]
 
@@ -27,7 +23,7 @@ export function Graph3D({
   repos: Repo[]
   filterRepos: Set<string>
 }) {
-  const [sub, setSub] = useState<ThreeDMode>('skyline')
+  const [sub, setSub] = useState<ThreeDMode>('galaxies')
 
   useEffect(() => {
     const stored = localStorage.getItem('gortex:3d') as ThreeDMode | null
@@ -60,9 +56,7 @@ export function Graph3D({
         <div className="threeD-picker-hint">{mode.hint}</div>
       </div>
       <div style={{ width: '100%', height: '100%' }}>
-        {sub === 'skyline'  && <ThreeDSkyline  graph={graph} repos={repos} filterRepos={filterRepos} />}
         {sub === 'strata'   && <ThreeDStrata   graph={graph} repos={repos} filterRepos={filterRepos} />}
-        {sub === 'orbital'  && <ThreeDOrbital  graph={graph} repos={repos} filterRepos={filterRepos} />}
         {sub === 'galaxies' && <ThreeDGalaxies graph={graph} repos={repos} filterRepos={filterRepos} />}
         {sub === 'city'     && <ThreeDCity     graph={graph} repos={repos} filterRepos={filterRepos} />}
       </div>

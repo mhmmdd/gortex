@@ -50,10 +50,12 @@ Sankey view went with it.
   is no persistence yet — that's the next step if investigations need
   to be named / hypothesised / pinned.
 
-- **Graph views**: Constellation, Hierarchy, and all five 3D subviews
-  (Skyline, Strata, Orbital, Galaxies, City) render real nodes and
-  edges from `/v1/graph` via `useGraph()`. Positions are laid out
-  deterministically from repo buckets + degree.
+- **Graph views**: Constellation and three 3D subviews
+  (Galaxies, Strata, City) render real nodes and edges from
+  `/v1/graph` via `useGraph()`. Galaxies uses `@react-three/fiber`
+  with `OrbitControls` (pan/zoom/rotate/pick); Strata and City
+  are still SVG and will be migrated to three-fiber next.
+  Positions are laid out deterministically from repo buckets + degree.
 
 If you discover any mocked data in a page, it is a bug — file an
 issue or wire it to `/v1/*`.

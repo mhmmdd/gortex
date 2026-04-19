@@ -6,11 +6,10 @@ import { CaveatBadge } from '@/components/primitives/Caveat'
 import { useTweaks } from '@/lib/tweaks'
 import { useDashboard, useRepos, useGraph } from '@/lib/hooks'
 import { GraphConstellation } from './views/Constellation'
-import { GraphHierarchical } from './views/Hierarchical'
 import { Graph3D } from './views/Graph3D'
 import type { Repo, KindCount } from '@/lib/schema'
 
-type Mode = 'constellation' | 'tree' | '3d'
+type Mode = 'constellation' | '3d'
 
 function RepoFilterPanel({
   repos,
@@ -141,9 +140,6 @@ export function GraphView() {
               <button type="button" className={mode === 'constellation' ? 'active' : ''} onClick={() => setMode('constellation')}>
                 <Icon name="graph" size={12} /> Constellation
               </button>
-              <button type="button" className={mode === 'tree' ? 'active' : ''} onClick={() => setMode('tree')}>
-                <Icon name="layers" size={12} /> Hierarchy
-              </button>
               <button type="button" className={mode === '3d' ? 'active' : ''} onClick={() => setMode('3d')}>
                 <Icon name="cube" size={12} /> 3D
               </button>
@@ -152,7 +148,6 @@ export function GraphView() {
 
           <div style={{ width: '100%', height: '100%' }}>
             {mode === 'constellation' && <GraphConstellation graph={graph} repos={repoList} filterRepos={filtered} />}
-            {mode === 'tree' && <GraphHierarchical graph={graph} repos={repoList} filterRepos={filtered} />}
             {mode === '3d' && <Graph3D graph={graph} repos={repoList} filterRepos={filtered} />}
           </div>
 
