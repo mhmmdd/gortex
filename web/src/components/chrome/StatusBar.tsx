@@ -2,37 +2,41 @@
 
 import { Icon } from '@/components/primitives/Icon'
 import { useTweaks } from '@/lib/tweaks'
-import { STATS } from '@/lib/seed'
+import { useDashboard } from '@/lib/hooks'
 
 export function StatusBar() {
   const scope = useTweaks((s) => s.scope)
+  const { data, error } = useDashboard()
+  const nodes = data?.stats.total_nodes
+  const edges = data?.stats.total_edges
+  const repos = data?.stats.repos
+  const caveats = data?.stats.caveats
+  const version = data?.stats.version ?? ''
+
   return (
     <div className="statusbar">
-      <span className="seg ok">
-        <Icon name="dot" size={10} /> live · watch
+      <span className={`seg ${error ? 'warn' : 'ok'}`}>
+        <Icon name="dot" size={10} /> {error ? 'offline' : 'live · watch'}
       </span>
       <span className="sep">·</span>
       <span className="seg">
-        nodes <b style={{ color: 'var(--fg-0)' }}>{STATS.totalNodes.toLocaleString()}</b>
+        nodes <b style={{ color: 'var(--fg-0)' }}>{nodes?.toLocaleString() ?? '—'}</b>
       </span>
       <span className="seg">
-        edges <b style={{ color: 'var(--fg-0)' }}>{STATS.totalEdges.toLocaleString()}</b>
+        edges <b style={{ color: 'var(--fg-0)' }}>{edges?.toLocaleString() ?? '—'}</b>
       </span>
       <span className="seg">
-        repos <b style={{ color: 'var(--fg-0)' }}>{STATS.reposIndexed}</b>
+        repos <b style={{ color: 'var(--fg-0)' }}>{repos ?? '—'}</b>
       </span>
       <span className="seg warn">
-        caveats <b style={{ color: 'var(--warn)' }}>{STATS.caveats}</b>
+        caveats <b style={{ color: 'var(--warn)' }}>{caveats ?? '—'}</b>
       </span>
       <span className="sep">·</span>
       <span className="seg">
-        scope <b style={{ color: 'var(--fg-0)' }}>{scope === 'federated' ? 'all repos' : 'core-api'}</b>
+        scope <b style={{ color: 'var(--fg-0)' }}>{scope === 'federated' ? 'all repos' : 'single'}</b>
       </span>
       <span className="spacer" />
-      <span className="seg">
-        <Icon name="history" size={11} /> indexed 33m ago
-      </span>
-      <span className="seg">{STATS.version}</span>
+      <span className="seg">{version}</span>
     </div>
   )
 }

@@ -1,27 +1,50 @@
 'use client'
 
+import { Icon } from '@/components/primitives/Icon'
 import { StackedBar } from '@/components/primitives/Charts'
-import { REPOS, STATS } from '@/lib/seed'
+import { useRepos } from '@/lib/hooks'
 
 export function ServicesView() {
+  const { data, loading, error, refetch } = useRepos()
+  const repos = data ?? []
   return (
     <>
       <div className="page-hd">
         <div>
           <h1>Services</h1>
-          <div className="sub">{STATS.reposIndexed} indexed services · click to drill in</div>
+          <div className="sub">
+            {loading ? 'Loading…' : `${repos.length} indexed services · click to drill in`}
+          </div>
+        </div>
+        <div className="actions">
+          <button type="button" className="btn" onClick={refetch}>
+            <Icon name="history" size={12} /> Refresh
+          </button>
         </div>
       </div>
+
+      {error && (
+        <div style={{ padding: 22, color: 'var(--danger)', fontSize: 13 }}>
+          Failed to load services: {error}
+        </div>
+      )}
+
+      {!error && repos.length === 0 && !loading && (
+        <div style={{ padding: 22, color: 'var(--fg-2)', fontSize: 13 }}>
+          No repositories indexed yet.
+        </div>
+      )}
+
       <div style={{ padding: 18, overflow: 'auto' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 10 }}>
-          {REPOS.map((r) => (
-            <div key={r.id} className="card" style={{ padding: 14 }}>
+          {repos.map((r) => (
+            <div key={r.id + ':' + r.owner} className="card" style={{ padding: 14 }}>
               <div className="hstack" style={{ gap: 8 }}>
                 <span style={{ width: 8, height: 28, borderRadius: 3, background: r.color }} />
                 <div>
                   <div className="mono" style={{ fontSize: 14, color: 'var(--fg-0)' }}>{r.id}</div>
                   <div className="mono faint" style={{ fontSize: 11 }}>
-                    {r.owner}/{r.id} · {r.lang}
+                    {r.owner ? `${r.owner}/${r.id}` : r.id} · {r.lang || 'mixed'}
                   </div>
                 </div>
                 <div style={{ marginLeft: 'auto', textAlign: 'right' }}>

@@ -1,13 +1,13 @@
 import type {
   HealthResponse, ToolInfo, GraphStats, ToolResponse, GraphData,
-  SubGraph, GortexNode, GraphChangeEvent, CommunityResult, Community,
-  Process, IndexHealth, CaveatsResponse, ActivityResponse, DashboardSnapshot,
+  SubGraph, GortexNode, GraphChangeEvent, IndexHealth,
 } from './types'
+import type {
+  Repo, Process, Contract, Caveat, Activity, Guard, Community,
+  DashboardSnapshot, KindCount, LanguageCount,
+} from './schema'
 
-// Single base URL for the gortex server (http://.../v1/*). The old
-// NEXT_PUBLIC_GORTEX_WEB_URL is kept as a fallback only for backwards
-// compatibility with any existing .env files; nothing should set it
-// going forward.
+// Single base URL for the gortex server (http://.../v1/*).
 const SERVER_URL = process.env.NEXT_PUBLIC_GORTEX_URL
   || process.env.NEXT_PUBLIC_GORTEX_WEB_URL
   || 'http://localhost:4747'
@@ -15,8 +15,6 @@ const SERVER_URL = process.env.NEXT_PUBLIC_GORTEX_URL
 // Optional bearer token. Required when the server was started with
 // --auth-token / $GORTEX_SERVER_TOKEN; otherwise leave unset.
 const AUTH_TOKEN = process.env.NEXT_PUBLIC_GORTEX_TOKEN || ''
-
-// --- Server API ---
 
 function authHeaders(): HeadersInit {
   return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}
@@ -55,16 +53,12 @@ async function callToolJSON<T>(name: string, args: Record<string, unknown> = {})
   try {
     return JSON.parse(text) as T
   } catch {
-    // Some tools return plain text (e.g. compact format) instead of JSON.
-    // Wrap it as an empty result so callers get a valid object.
     return { nodes: [], edges: [], text } as unknown as T
   }
 }
 
-// --- Public API ---
-
 export const api = {
-  // Health & stats
+  // --- Health & stats ---
   health: async (): Promise<HealthResponse> => {
     const res = await serverFetch('/v1/health')
     return res.json()
@@ -80,8 +74,7 @@ export const api = {
     return res.json()
   },
 
-  // Full brief-graph dump for force-directed rendering. Optional
-  // project / repo filters scope the dump the same way MCP tools do.
+  // --- Brief graph dump (force-directed rendering) ---
   getGraph: async (opts?: { project?: string; repo?: string }): Promise<GraphData> => {
     const qs = new URLSearchParams()
     if (opts?.project) qs.set('project', opts.project)
@@ -91,17 +84,58 @@ export const api = {
     return res.json()
   },
 
-  getFileGraph: async (path: string): Promise<SubGraph> => {
-    return callToolJSON<SubGraph>('get_file_summary', { path })
+  // --- UI-shaped /v1 endpoints (added for the design) ---
+  dashboard: async (): Promise<DashboardSnapshot> => {
+    const res = await serverFetch('/v1/dashboard')
+    return res.json()
   },
 
-  getCluster: async (id: string, radius = 2): Promise<SubGraph> => {
-    return callToolJSON<SubGraph>('get_cluster', { id, radius })
+  repos: async (): Promise<{ repos: Repo[] }> => {
+    const res = await serverFetch('/v1/repos')
+    return res.json()
   },
 
-  // MCP tool wrappers
-  searchSymbols: async (query: string, limit = 20): Promise<string> => {
-    return callTool('search_symbols', { query, limit, compact: true })
+  processes: async (): Promise<{ processes: Process[] }> => {
+    const res = await serverFetch('/v1/processes')
+    return res.json()
+  },
+
+  contracts: async (): Promise<{ contracts: Contract[] }> => {
+    const res = await serverFetch('/v1/contracts')
+    return res.json()
+  },
+
+  communities: async (): Promise<{ communities: Community[]; modularity: number }> => {
+    const res = await serverFetch('/v1/communities')
+    return res.json()
+  },
+
+  guards: async (): Promise<{ guards: Guard[] }> => {
+    const res = await serverFetch('/v1/guards')
+    return res.json()
+  },
+
+  caveats: async (): Promise<{ caveats: Caveat[] }> => {
+    const res = await serverFetch('/v1/caveats')
+    return res.json()
+  },
+
+  activity: async (limit = 50): Promise<{ events: Activity[] }> => {
+    const res = await serverFetch(`/v1/activity?limit=${limit}`)
+    return res.json()
+  },
+
+  // --- Symbol-level MCP tool wrappers ---
+  searchSymbols: async (query: string, limit = 20): Promise<SymbolSearchResult[]> => {
+    if (!query.trim()) return []
+    const text = await callTool('search_symbols', { query, limit, format: 'json' })
+    try {
+      const parsed = JSON.parse(text) as { results?: SymbolSearchResult[] } | SymbolSearchResult[]
+      if (Array.isArray(parsed)) return parsed
+      return parsed.results ?? []
+    } catch {
+      return []
+    }
   },
 
   getSymbol: async (id: string): Promise<GortexNode | null> => {
@@ -118,36 +152,16 @@ export const api = {
     } catch { return result }
   },
 
-  getSymbolSignature: async (id: string): Promise<string> => {
-    return callTool('get_symbol_signature', { id })
-  },
-
-  getCommunities: async (): Promise<CommunityResult> => {
-    return callToolJSON<CommunityResult>('get_communities', {})
-  },
-
-  getCommunity: async (id: string): Promise<Community> => {
-    return callToolJSON<Community>('get_community', { id })
-  },
-
-  getProcesses: async (): Promise<{ processes: Process[] }> => {
-    return callToolJSON<{ processes: Process[] }>('get_processes', {})
-  },
-
-  getProcess: async (id: string): Promise<Process> => {
-    return callToolJSON<Process>('get_process', { id })
-  },
-
   getCallers: async (id: string, depth = 2): Promise<SubGraph> => {
-    return callToolJSON<SubGraph>('get_callers', { id, depth, compact: true })
+    return callToolJSON<SubGraph>('get_callers', { id, depth })
   },
 
   getCallChain: async (id: string, depth = 2): Promise<SubGraph> => {
-    return callToolJSON<SubGraph>('get_call_chain', { id, depth, compact: true })
+    return callToolJSON<SubGraph>('get_call_chain', { id, depth })
   },
 
   findUsages: async (id: string): Promise<SubGraph> => {
-    return callToolJSON<SubGraph>('find_usages', { id, compact: true })
+    return callToolJSON<SubGraph>('find_usages', { id })
   },
 
   getDependencies: async (id: string): Promise<SubGraph> => {
@@ -158,55 +172,15 @@ export const api = {
     return callToolJSON<SubGraph>('get_dependents', { id })
   },
 
-  explainChangeImpact: async (symbolIds: string): Promise<unknown> => {
-    return callToolJSON('explain_change_impact', { ids: symbolIds })
-  },
-
-  findDeadCode: async (): Promise<unknown> => {
-    return callToolJSON('find_dead_code', {})
-  },
-
-  findHotspots: async (): Promise<unknown> => {
-    return callToolJSON('find_hotspots', {})
-  },
-
-  findCycles: async (): Promise<unknown> => {
-    return callToolJSON('find_cycles', {})
-  },
-
   indexHealth: async (): Promise<IndexHealth> => {
     return callToolJSON<IndexHealth>('index_health', {})
   },
 
-  graphStats: async (): Promise<GraphStats> => {
-    return callToolJSON<GraphStats>('graph_stats', {})
-  },
-
-  // Aggregated server endpoints (added by the dashboard rewrite)
-  caveats: async (): Promise<CaveatsResponse> => {
-    const res = await serverFetch('/v1/caveats')
-    return res.json()
-  },
-
-  activity: async (limit = 50): Promise<ActivityResponse> => {
-    const res = await serverFetch(`/v1/activity?limit=${limit}`)
-    return res.json()
-  },
-
-  dashboard: async (): Promise<DashboardSnapshot> => {
-    const res = await serverFetch('/v1/dashboard')
-    return res.json()
-  },
-
-  // Raw tool call
+  // --- Raw escape hatches (do not use in pages) ---
   callTool,
   callToolJSON,
 
-  // SSE. The browser EventSource API can't attach custom headers, so
-  // the token is passed as a query string when present — the server
-  // accepts ?token=<t> as a fallback for streaming endpoints.
-  // Localhost dev (the common case) runs the server unauthenticated,
-  // so AUTH_TOKEN is empty and nothing is appended.
+  // --- SSE for live activity ---
   subscribeEvents: (callback: (event: GraphChangeEvent) => void): EventSource => {
     const qs = AUTH_TOKEN ? `?token=${encodeURIComponent(AUTH_TOKEN)}` : ''
     const es = new EventSource(`${SERVER_URL}/v1/events${qs}`)
@@ -218,4 +192,15 @@ export const api = {
     })
     return es
   },
+}
+
+export type { Repo, Process, Contract, Caveat, Activity, Guard, Community, DashboardSnapshot, KindCount, LanguageCount }
+
+export type SymbolSearchResult = {
+  id: string
+  kind: string
+  name: string
+  path: string
+  line: number
+  sig?: string
 }

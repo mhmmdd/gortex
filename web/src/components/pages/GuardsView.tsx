@@ -1,61 +1,78 @@
 'use client'
 
 import { Icon } from '@/components/primitives/Icon'
-import { GUARDS } from '@/lib/seed'
+import { useGuards } from '@/lib/hooks'
 
 export function GuardsView() {
-  const violated = GUARDS.filter((g) => g.status === 'violated').length
-  const warn = GUARDS.filter((g) => g.status === 'warn').length
+  const { data, loading, error, refetch } = useGuards()
+  const guards = data ?? []
+  const violated = guards.filter((g) => g.status === 'violated').length
+  const warn = guards.filter((g) => g.status === 'warn').length
+
   return (
     <>
       <div className="page-hd">
         <div>
           <h1>Guards</h1>
           <div className="sub">
-            {GUARDS.length} rules from <span className="mono">.gortex.yaml</span> · {violated} violated · {warn} warning
+            {loading
+              ? 'Evaluating guards from .gortex.yaml…'
+              : `${guards.length} rules · ${violated} violated · ${warn} warn`}
           </div>
         </div>
         <div className="actions">
-          <button type="button" className="btn ghost">
-            <Icon name="file" size={12} /> Open .gortex.yaml
-          </button>
-          <button type="button" className="btn">
-            <Icon name="plus" size={12} /> New guard
+          <button type="button" className="btn" onClick={refetch}>
+            <Icon name="history" size={12} /> Refresh
           </button>
         </div>
       </div>
-      <div style={{ padding: '18px 22px', overflow: 'auto' }}>
-        <div className="card" style={{ padding: 0 }}>
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Rule</th>
-                <th>Kind</th>
-                <th>Scope</th>
-                <th>Status</th>
-                <th className="num">Hits</th>
-              </tr>
-            </thead>
-            <tbody>
-              {GUARDS.map((g) => (
-                <tr key={g.id}>
-                  <td className="mono-cell">{g.name}</td>
-                  <td>
-                    <span className="tag-dim">{g.kind}</span>
-                  </td>
-                  <td className="mono-cell faint">{g.scope}</td>
-                  <td>
-                    {g.status === 'violated' && <span className="cav risk">violated</span>}
-                    {g.status === 'warn' && <span className="cav deprecated">warning</span>}
-                    {g.status === 'ok' && <span className="chip" style={{ color: 'var(--ok)' }}>passing</span>}
-                  </td>
-                  <td className="num">{g.hits}</td>
+
+      {error && (
+        <div style={{ padding: 22, color: 'var(--danger)', fontSize: 13 }}>
+          Failed to load guards: {error}
+        </div>
+      )}
+
+      {!error && guards.length === 0 && !loading && (
+        <div style={{ padding: 22, color: 'var(--fg-2)', fontSize: 13 }}>
+          No guards configured. Add rules to <code>.gortex.yaml</code> to enforce architecture invariants.
+        </div>
+      )}
+
+      {guards.length > 0 && (
+        <div style={{ padding: '18px 22px', overflow: 'auto' }}>
+          <div className="card" style={{ padding: 0 }}>
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>Kind</th>
+                  <th>Scope</th>
+                  <th>Status</th>
+                  <th className="num">Hits</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {guards.map((g) => (
+                  <tr key={g.id}>
+                    <td className="mono-cell">{g.name}</td>
+                    <td>
+                      <span className="tag-dim">{g.kind}</span>
+                    </td>
+                    <td className="mono-cell faint">{g.scope}</td>
+                    <td>
+                      {g.status === 'violated' && <span className="cav risk">violated</span>}
+                      {g.status === 'warn' && <span className="cav deprecated">warning</span>}
+                      {g.status === 'ok' && <span className="chip" style={{ color: 'var(--ok)' }}>passing</span>}
+                    </td>
+                    <td className="num">{g.hits}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
     </>
   )
 }

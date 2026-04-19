@@ -1,16 +1,16 @@
 'use client'
 
 import { useMemo } from 'react'
-import { REPOS, SYMBOLS } from '@/lib/seed'
 import { useInspector } from '@/lib/inspector'
+import type { Repo } from '@/lib/schema'
 import { rnd, sampleSymbolName } from './rng'
 
-type Node = { x: number; y: number; repo: string; color: string; size: number; kind: string; label: string | null }
+type Node = { x: number; y: number; repo: string; color: string; size: number; label: string | null }
 
-function buildConstellation(): Node[] {
+function buildConstellation(repos: Repo[]): Node[] {
   const r = rnd(7)
   const out: Node[] = []
-  REPOS.forEach((rep) => {
+  repos.forEach((rep) => {
     const cx = 200 + 700 * r()
     const cy = 160 + 420 * r()
     const n = Math.min(60, Math.max(10, Math.round(rep.nodes / 180)))
@@ -24,7 +24,6 @@ function buildConstellation(): Node[] {
         repo: rep.id,
         color: rep.color,
         size,
-        kind: ['function', 'method', 'type', 'interface', 'variable'][Math.floor(r() * 5)],
         label: i === 0 ? rep.id : r() > 0.85 ? sampleSymbolName(r) : null,
       })
     }
@@ -32,9 +31,9 @@ function buildConstellation(): Node[] {
   return out
 }
 
-export function GraphConstellation({ filterRepos }: { filterRepos: Set<string> }) {
+export function GraphConstellation({ repos, filterRepos }: { repos: Repo[]; filterRepos: Set<string> }) {
   const setSym = useInspector((s) => s.setSym)
-  const nodes = useMemo(buildConstellation, [])
+  const nodes = useMemo(() => buildConstellation(repos), [repos])
   const filt = useMemo(
     () => nodes.filter((n) => !filterRepos.size || filterRepos.has(n.repo)),
     [nodes, filterRepos],
@@ -54,12 +53,6 @@ export function GraphConstellation({ filterRepos }: { filterRepos: Set<string> }
 
   return (
     <svg viewBox="0 0 1100 640" width="100%" height="100%" style={{ display: 'block' }}>
-      <defs>
-        <radialGradient id="cluster-glow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.08" />
-          <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-        </radialGradient>
-      </defs>
       {edges.map(([a, b, w], i) => (
         <line
           key={i}
@@ -73,17 +66,28 @@ export function GraphConstellation({ filterRepos }: { filterRepos: Set<string> }
         />
       ))}
       {filt.map((n, i) => (
-        <g key={i} onClick={() => n.label && setSym(SYMBOLS[0])} style={{ cursor: n.label ? 'pointer' : 'default' }}>
+        <g
+          key={i}
+          onClick={() =>
+            n.label &&
+            setSym({
+              id: `${n.repo}::${n.label}`,
+              kind: 'function',
+              name: n.label,
+              repo: n.repo,
+              file: '',
+              sig: '',
+              callers: 0,
+              callees: 0,
+              community: '',
+              caveats: [],
+            })
+          }
+          style={{ cursor: n.label ? 'pointer' : 'default' }}
+        >
           <circle cx={n.x} cy={n.y} r={n.size} fill={n.color} opacity="0.9" />
           {n.label && (
-            <text
-              x={n.x + n.size + 3}
-              y={n.y + 3}
-              fontFamily="JetBrains Mono"
-              fontSize="10"
-              fill="var(--fg-1)"
-              opacity="0.9"
-            >
+            <text x={n.x + n.size + 3} y={n.y + 3} fontFamily="JetBrains Mono" fontSize="10" fill="var(--fg-1)" opacity="0.9">
               {n.label}
             </text>
           )}

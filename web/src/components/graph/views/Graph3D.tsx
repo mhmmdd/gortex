@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import type { Repo } from '@/lib/schema'
 import { ThreeDSkyline } from './Skyline'
 import { ThreeDStrata } from './Strata'
 import { ThreeDOrbital } from './Orbital'
@@ -18,7 +19,7 @@ const MODES: { id: ThreeDMode; label: string; hint: string }[] = [
   { id: 'city',     label: 'City',     hint: 'Buildings = symbols · skybridges = contracts' },
 ]
 
-export function Graph3D() {
+export function Graph3D({ repos }: { repos: Repo[] }) {
   const [sub, setSub] = useState<ThreeDMode>('skyline')
 
   useEffect(() => {
@@ -52,11 +53,11 @@ export function Graph3D() {
         <div className="threeD-picker-hint">{mode.hint}</div>
       </div>
       <div style={{ width: '100%', height: '100%' }}>
-        {sub === 'skyline'  && <ThreeDSkyline />}
-        {sub === 'strata'   && <ThreeDStrata />}
-        {sub === 'orbital'  && <ThreeDOrbital />}
-        {sub === 'galaxies' && <ThreeDGalaxies />}
-        {sub === 'city'     && <ThreeDCity />}
+        {sub === 'skyline'  && <ThreeDSkyline  repos={repos} />}
+        {sub === 'strata'   && <ThreeDStrata   repos={repos} />}
+        {sub === 'orbital'  && <ThreeDOrbital  repos={repos} />}
+        {sub === 'galaxies' && <ThreeDGalaxies repos={repos} />}
+        {sub === 'city'     && <ThreeDCity     repos={repos} />}
       </div>
     </div>
   )

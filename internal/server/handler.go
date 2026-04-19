@@ -34,7 +34,12 @@ import (
 //	GET  /v1/events       SSE stream of graph-change events
 //	GET  /v1/activity     ring buffer of recent graph-change events
 //	GET  /v1/caveats      aggregated hotspots/dead-code/cycles/guards
-//	GET  /v1/dashboard    bundled stats+per-repo+caveat counts snapshot
+//	GET  /v1/dashboard    bundled snapshot for the dashboard hero
+//	GET  /v1/repos        per-repository node/edge/kind breakdown
+//	GET  /v1/processes    discovered execution flows
+//	GET  /v1/contracts    detected API/event/URL contracts
+//	GET  /v1/communities  community detection result
+//	GET  /v1/guards       guard rule evaluation status
 //
 // /v1/graph scoping (?project/?repo) and /v1/events streaming require
 // a ConfigManager and an event hub respectively, wired via
@@ -120,6 +125,11 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /v1/activity", h.handleActivity)
 	h.mux.HandleFunc("GET /v1/caveats", h.handleCaveats)
 	h.mux.HandleFunc("GET /v1/dashboard", h.handleDashboard)
+	h.mux.HandleFunc("GET /v1/repos", h.handleRepos)
+	h.mux.HandleFunc("GET /v1/processes", h.handleProcesses)
+	h.mux.HandleFunc("GET /v1/contracts", h.handleContracts)
+	h.mux.HandleFunc("GET /v1/communities", h.handleCommunities)
+	h.mux.HandleFunc("GET /v1/guards", h.handleGuards)
 }
 
 // --- /health ---

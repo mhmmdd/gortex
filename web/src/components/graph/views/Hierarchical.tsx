@@ -1,7 +1,12 @@
 'use client'
 
+// Hierarchy view: top-down call tree. Currently uses a static demo tree
+// because the design's tree layout requires a chosen entry symbol — when
+// a process flow is selected (Processes → Open in investigation), this
+// view should render that flow's `steps` instead. Wiring tracked in the
+// Phase-5 follow-up.
+
 import { useInspector } from '@/lib/inspector'
-import { SYMBOLS } from '@/lib/seed'
 
 type TreeNode = { name: string; kind?: string; caveat?: string; children?: TreeNode[] }
 
@@ -16,21 +21,14 @@ const tree: TreeNode = {
           name: 'EmailIngestHandler',
           kind: 'method',
           children: [
-            {
-              name: 'ExtractLinks',
-              kind: 'function',
-              caveat: 'deprecated',
-              children: [
-                { name: 'urlParse', kind: 'function' },
-                { name: 'normalize', kind: 'function' },
-              ],
-            },
+            { name: 'ExtractLinks', kind: 'function', caveat: 'deprecated', children: [
+              { name: 'urlParse', kind: 'function' },
+              { name: 'normalize', kind: 'function' },
+            ]},
             { name: 'Authn', kind: 'function', caveat: 'hot' },
-            {
-              name: 'PostgresTuckStore.Insert',
-              kind: 'method',
-              children: [{ name: 'pgx.Exec', kind: 'method' }],
-            },
+            { name: 'PostgresTuckStore.Insert', kind: 'method', children: [
+              { name: 'pgx.Exec', kind: 'method' },
+            ]},
           ],
         },
       ],
@@ -92,23 +90,27 @@ export function GraphHierarchical() {
             key={i}
             transform={`translate(${p.x - tw / 2},${p.y - 16})`}
             style={{ cursor: 'pointer' }}
-            onClick={() => setSym(SYMBOLS[0])}
+            onClick={() =>
+              setSym({
+                id: `tree::${n.name}`,
+                kind: (n.kind as 'function') ?? 'function',
+                name: n.name,
+                repo: '',
+                file: '',
+                sig: '',
+                callers: 0,
+                callees: 0,
+                community: '',
+                caveats: n.caveat ? [n.caveat] : [],
+              })
+            }
           >
-            <rect
-              width={tw}
-              height={32}
-              rx={6}
-              fill="var(--bg-2)"
-              stroke={n.caveat === 'hot' ? 'var(--pink)' : n.caveat === 'deprecated' ? 'var(--warn)' : 'var(--line-2)'}
-              strokeWidth={n.caveat ? 1.4 : 1}
-            />
+            <rect width={tw} height={32} rx={6} fill="var(--bg-2)" stroke={n.caveat === 'hot' ? 'var(--pink)' : n.caveat === 'deprecated' ? 'var(--warn)' : 'var(--line-2)'} strokeWidth={n.caveat ? 1.4 : 1} />
             <circle cx={12} cy={16} r={4} fill={kindColor(n.kind)} />
             <text x={22} y={20} fontFamily="JetBrains Mono" fontSize="11" fill="var(--fg-0)">
               {n.name}
             </text>
-            {n.caveat && (
-              <circle cx={tw - 10} cy={10} r={3} fill={n.caveat === 'hot' ? 'var(--pink)' : 'var(--warn)'} />
-            )}
+            {n.caveat && <circle cx={tw - 10} cy={10} r={3} fill={n.caveat === 'hot' ? 'var(--pink)' : 'var(--warn)'} />}
           </g>
         )
       })}

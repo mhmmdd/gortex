@@ -1,14 +1,14 @@
 'use client'
 
 import { useMemo } from 'react'
-import { REPOS } from '@/lib/seed'
+import type { Repo } from '@/lib/schema'
 import { rnd } from './rng'
 
-export function ThreeDSkyline() {
+export function ThreeDSkyline({ repos }: { repos: Repo[] }) {
   const nodes = useMemo(() => {
     const r = rnd(23)
     const out: { gx: number; gy: number; elev: number; color: string; repo: string; hot: boolean }[] = []
-    REPOS.forEach((rep, idx) => {
+    repos.forEach((rep, idx) => {
       const baseX = 180 + (idx % 4) * 220
       const baseY = 120 + Math.floor(idx / 4) * 260
       const n = Math.min(35, Math.max(6, Math.round(rep.nodes / 300)))
@@ -27,7 +27,7 @@ export function ThreeDSkyline() {
       }
     })
     return out
-  }, [])
+  }, [repos])
   const iso = (x: number, y: number, z: number) => ({
     x: 540 + (x - y) * 0.86,
     y: 280 + (x + y) * 0.5 - z,
@@ -44,7 +44,7 @@ export function ThreeDSkyline() {
         const b = iso(1600, i * 80, 0)
         return <line key={`gy${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--line-1)" strokeWidth="0.3" />
       })}
-      {REPOS.map((rep, idx) => {
+      {repos.map((rep, idx) => {
         const baseX = 180 + (idx % 4) * 220
         const baseY = 120 + Math.floor(idx / 4) * 260
         const pad = 95
@@ -54,10 +54,12 @@ export function ThreeDSkyline() {
           [baseX + pad, baseY + pad],
           [baseX - pad, baseY + pad],
         ]
-        const pts = c.map(([x, y]) => {
-          const p = iso(x, y, 0)
-          return `${p.x},${p.y}`
-        }).join(' ')
+        const pts = c
+          .map(([x, y]) => {
+            const p = iso(x, y, 0)
+            return `${p.x},${p.y}`
+          })
+          .join(' ')
         return (
           <polygon
             key={rep.id}
@@ -90,7 +92,7 @@ export function ThreeDSkyline() {
           </g>
         )
       })}
-      {REPOS.map((rep, idx) => {
+      {repos.map((rep, idx) => {
         const baseX = 180 + (idx % 4) * 220
         const baseY = 120 + Math.floor(idx / 4) * 260
         const p = iso(baseX - 85, baseY + 95, 0)

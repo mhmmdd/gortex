@@ -2,19 +2,47 @@
 
 import { Icon } from '@/components/primitives/Icon'
 import { Sparkline, Meter } from '@/components/primitives/Charts'
-import { COMMUNITIES, REPOS, STATS } from '@/lib/seed'
+import { useCommunities, useRepos } from '@/lib/hooks'
+import { FAKE_SPARK } from '@/lib/seed'
 
 export function CommunitiesView() {
+  const { data, loading, error, refetch } = useCommunities()
+  const { data: repos } = useRepos()
+  const communities = data?.communities ?? []
+  const modularity = data?.modularity ?? 0
+
+  const repoColor = (id: string) => repos?.find((r) => r.id === id)?.color || 'var(--accent)'
+
   return (
     <>
       <div className="page-hd">
         <div>
           <h1>Communities</h1>
           <div className="sub">
-            {STATS.communities} modules detected · modularity 60% · tight groups = clear modules
+            {loading
+              ? 'Detecting communities…'
+              : `${communities.length} modules · modularity ${(modularity * 100).toFixed(0)}%`}
           </div>
         </div>
+        <div className="actions">
+          <button type="button" className="btn" onClick={refetch}>
+            <Icon name="history" size={12} /> Refresh
+          </button>
+        </div>
       </div>
+
+      {error && (
+        <div style={{ padding: 22, color: 'var(--danger)', fontSize: 13 }}>
+          Failed to load communities: {error}
+        </div>
+      )}
+
+      {!error && communities.length === 0 && !loading && (
+        <div style={{ padding: 22, color: 'var(--fg-2)', fontSize: 13 }}>
+          No communities detected. Community detection requires an indexed graph with at least a few connected modules.
+        </div>
+      )}
+
       <div
         style={{
           padding: 18,
@@ -24,7 +52,7 @@ export function CommunitiesView() {
           gap: 10,
         }}
       >
-        {COMMUNITIES.map((c) => (
+        {communities.map((c) => (
           <div
             key={c.id}
             className="card"
@@ -34,18 +62,11 @@ export function CommunitiesView() {
               <div className="hstack" style={{ gap: 6 }}>
                 <Icon name="caret" size={10} />
                 <span className="mono" style={{ fontSize: 14, color: 'var(--fg-0)' }}>{c.name}</span>
-                <span className="tag-dim">{c.repo}</span>
+                {c.repo && <span className="tag-dim">{c.repo}</span>}
               </div>
               <div className="hstack" style={{ gap: 8, marginTop: 8, fontSize: 11.5, color: 'var(--fg-2)' }}>
                 <span><Icon name="users" size={11} /> {c.symbols} symbols</span>
                 <span><Icon name="file" size={11} /> {c.files} files</span>
-                <span
-                  style={{
-                    color: c.growth.startsWith('+') ? 'var(--ok)' : c.growth.startsWith('-') ? 'var(--danger)' : 'var(--fg-2)',
-                  }}
-                >
-                  {c.growth} size
-                </span>
               </div>
               <div style={{ marginTop: 8 }}>
                 <div className="hstack" style={{ justifyContent: 'space-between', fontSize: 11, color: 'var(--fg-2)' }}>
@@ -58,11 +79,12 @@ export function CommunitiesView() {
                 />
               </div>
             </div>
-            <div style={{ opacity: 0.8 }}>
+            {/* MOCK: per-community trend sparkline (no time-series storage). */}
+            <div style={{ opacity: 0.6 }}>
               <Sparkline
-                data={[3, 4, 5, 5, 6, 7, 6, 8, 9, 10, 10, 11]}
-                stroke={REPOS.find((r) => r.id === c.repo)?.color || 'var(--accent)'}
-                fill={REPOS.find((r) => r.id === c.repo)?.color || 'var(--accent)'}
+                data={FAKE_SPARK.default}
+                stroke={repoColor(c.repo)}
+                fill={repoColor(c.repo)}
                 w={180}
                 h={40}
               />

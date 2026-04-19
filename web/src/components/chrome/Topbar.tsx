@@ -4,9 +4,9 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Icon } from '@/components/primitives/Icon'
 import { Kbd } from '@/components/primitives/Caveat'
-import { STATS } from '@/lib/seed'
 import { useTweaks } from '@/lib/tweaks'
 import { useCmdK } from '@/lib/cmdk'
+import { useDashboard } from '@/lib/hooks'
 import { PAGE_CRUMBS } from './nav'
 import { pageIdFromPath } from './path'
 
@@ -15,6 +15,8 @@ export function Topbar() {
   const scope = useTweaks((s) => s.scope)
   const setScope = useTweaks((s) => s.set)
   const openCmdK = useCmdK((s) => s.setOpen)
+  const { data } = useDashboard()
+  const version = data?.stats.version ?? ''
 
   const pageId = pageIdFromPath(pathname)
   const crumbs = PAGE_CRUMBS[pageId] ?? PAGE_CRUMBS.dashboard
@@ -24,7 +26,7 @@ export function Topbar() {
       <Link href="/" className="brand">
         <div className="logo">G</div>
         <span>Gortex</span>
-        <span className="kbd mono">{STATS.version}</span>
+        {version && <span className="kbd mono">{version}</span>}
       </Link>
       <div className="breadcrumbs">
         {crumbs.map((c, i) => (

@@ -5,13 +5,14 @@ import { useRouter } from 'next/navigation'
 import { Icon } from '@/components/primitives/Icon'
 import { useCmdK } from '@/lib/cmdk'
 import { useInspector } from '@/lib/inspector'
-import { SYMBOLS, RECENT_SEARCHES } from '@/lib/seed'
+import { useSymbolSearch } from '@/lib/hooks'
+import { RECENT_SEARCHES } from '@/lib/seed'
 
 const JUMPS = [
   { k: 'Dashboard',     sub: 'control room',          meta: 'G D', href: '/' },
   { k: 'Graph explorer',sub: '4 view modes',          meta: 'G G', href: '/graph' },
-  { k: 'Investigation', sub: 'open: Email ingest 500s',meta: 'G I', href: '/investigations' },
-  { k: 'Caveats',       sub: '42 flagged',            meta: 'G C', href: '/caveats' },
+  { k: 'Investigation', sub: 'cross-repo flow trace',  meta: 'G I', href: '/investigations' },
+  { k: 'Caveats',       sub: 'severity-ranked',        meta: 'G C', href: '/caveats' },
 ]
 
 export function CommandPalette() {
@@ -21,6 +22,7 @@ export function CommandPalette() {
   const router = useRouter()
   const [q, setQ] = useState('')
   const [idx, setIdx] = useState(0)
+  const { data: results, loading } = useSymbolSearch(q, 12)
 
   useEffect(() => {
     function h(e: KeyboardEvent) {
@@ -51,14 +53,6 @@ export function CommandPalette() {
   }, [open, setOpen])
 
   if (!open) return null
-
-  const results = q
-    ? SYMBOLS.filter(
-        (s) =>
-          s.name.toLowerCase().includes(q.toLowerCase()) ||
-          s.file.toLowerCase().includes(q.toLowerCase()),
-      )
-    : SYMBOLS.slice(0, 4)
 
   return (
     <div className="cmd-modal-scrim" onClick={() => setOpen(false)}>
@@ -93,9 +87,10 @@ export function CommandPalette() {
                 <span className="meta">{r.meta}</span>
               </div>
             ))}
+            {/* Recent searches are still seeded — see lib/seed.ts header. */}
             <div className="sec-ti">Recent</div>
             {RECENT_SEARCHES.map((r, i) => (
-              <div key={i} className="cmd-row">
+              <div key={i} className="cmd-row" onClick={() => setQ(r.q)}>
                 <Icon name="history" size={12} />
                 <div>
                   <div className="k mono">{r.q}</div>
@@ -110,43 +105,47 @@ export function CommandPalette() {
         )}
         {q && (
           <div className="cmd-section">
-            <div className="sec-ti">Symbols ({results.length})</div>
-            {results.map((s, i) => (
+            <div className="sec-ti">
+              Symbols ({loading ? '…' : results?.length ?? 0})
+            </div>
+            {(results ?? []).map((s, i) => (
               <div
                 key={s.id}
                 className={`cmd-row ${i === idx ? 'active' : ''}`}
                 onClick={() => {
-                  setSym(s)
+                  setSym({
+                    id: s.id,
+                    kind: s.kind,
+                    name: s.name,
+                    repo: s.id.split(':')[0] ?? '',
+                    file: `${s.path}:${s.line}`,
+                    sig: s.sig ?? '',
+                    callers: 0,
+                    callees: 0,
+                    community: '',
+                    caveats: [],
+                  })
                   setOpen(false)
                 }}
               >
                 <span className={`swatch sw-${s.kind}`} />
                 <div>
                   <div className="k mono">{s.name}</div>
-                  <div className="sub">
-                    {s.repo} · {s.file}
-                  </div>
+                  <div className="sub">{s.path}:{s.line}</div>
                 </div>
                 <span className="meta">{s.kind}</span>
               </div>
             ))}
-            <div className="sec-ti">Actions</div>
-            <div className="cmd-row">
-              <Icon name="route" size={12} />
-              <div>
-                <div className="k">Trace &quot;{q}&quot; across repos</div>
-                <div className="sub">builds process flow from entry</div>
+            {!loading && (!results || results.length === 0) && (
+              <div className="cmd-row" style={{ cursor: 'default' }}>
+                <span />
+                <div>
+                  <div className="k">No matches.</div>
+                  <div className="sub">Try a different query or use facets like <code>kind:type</code>.</div>
+                </div>
+                <span />
               </div>
-              <span className="meta">⌘↵</span>
-            </div>
-            <div className="cmd-row">
-              <Icon name="fork" size={12} />
-              <div>
-                <div className="k">Blast radius for &quot;{q}&quot;</div>
-                <div className="sub">direct + transitive dependents</div>
-              </div>
-              <span className="meta">⌥↵</span>
-            </div>
+            )}
           </div>
         )}
       </div>

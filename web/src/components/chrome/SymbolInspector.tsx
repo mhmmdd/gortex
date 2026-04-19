@@ -3,11 +3,13 @@
 import { Icon } from '@/components/primitives/Icon'
 import { CaveatBadge } from '@/components/primitives/Caveat'
 import { useInspector } from '@/lib/inspector'
-import { SYMBOLS, PROCESSES } from '@/lib/seed'
+import { useUsages, useDependencies } from '@/lib/hooks'
 
 export function SymbolInspector() {
   const sym = useInspector((s) => s.sym)
   const setSym = useInspector((s) => s.setSym)
+  const usages = useUsages(sym?.id ?? null)
+  const deps = useDependencies(sym?.id ?? null)
 
   if (!sym) {
     return (
@@ -18,25 +20,12 @@ export function SymbolInspector() {
           <div style={{ marginTop: 8 }}>Select a symbol, edge, or flow step</div>
           <div style={{ fontSize: 11, marginTop: 4 }}>Details appear here without leaving the canvas</div>
         </div>
-        <div className="section-label" style={{ padding: 0, marginTop: 14, marginBottom: 8 }}>Pinned symbols</div>
-        <div className="vstack">
-          {SYMBOLS.slice(0, 4).map((s) => (
-            <button
-              type="button"
-              key={s.id}
-              className="ref"
-              onClick={() => setSym(s)}
-              style={{ width: '100%', textAlign: 'left' }}
-            >
-              <span className={`swatch sw-${s.kind}`} />
-              <span className="where">{s.name}</span>
-              <span className="count mono">{s.repo}</span>
-            </button>
-          ))}
-        </div>
       </div>
     )
   }
+
+  const callerNodes = usages.data?.nodes ?? []
+  const calleeNodes = deps.data?.nodes ?? []
 
   return (
     <div>
@@ -74,81 +63,99 @@ export function SymbolInspector() {
         </div>
       </div>
 
-      <div className="sym-section">
-        <div className="sec-ti">Signature</div>
-        <pre className="code" style={{ margin: 0 }}>{sym.sig}</pre>
-      </div>
+      {sym.sig && (
+        <div className="sym-section">
+          <div className="sec-ti">Signature</div>
+          <pre className="code" style={{ margin: 0 }}>{sym.sig}</pre>
+        </div>
+      )}
 
       <div className="sym-section">
         <div className="sec-ti">
           <span>Callers</span>
-          <span className="mono faint" style={{ fontSize: 11 }}>{sym.callers} sites</span>
+          <span className="mono faint" style={{ fontSize: 11 }}>
+            {usages.loading ? '…' : `${callerNodes.length} sites`}
+          </span>
         </div>
-        {['RegisterRoutes', 'handleEmail', 'dispatchEvent', 'normalizeInput']
-          .slice(0, sym.callers || 2)
-          .map((n, i) => (
-            <div key={i} className="ref">
-              <span className="swatch sw-function" />
-              <span className="where">{n}</span>
-              <span className="count">{sym.repo}</span>
-            </div>
-          ))}
+        {usages.error && <div className="faint" style={{ fontSize: 11 }}>error: {usages.error}</div>}
+        {!usages.loading && callerNodes.length === 0 && (
+          <div className="faint" style={{ fontSize: 11 }}>no incoming references</div>
+        )}
+        {callerNodes.slice(0, 8).map((n) => (
+          <button
+            type="button"
+            key={n.id}
+            className="ref"
+            style={{ width: '100%', textAlign: 'left' }}
+            onClick={() =>
+              setSym({
+                id: n.id,
+                kind: (n.kind as 'function') ?? 'function',
+                name: n.name,
+                repo: n.repo_prefix ?? '',
+                file: `${n.file_path}:${n.start_line ?? 0}`,
+                sig: '',
+                callers: 0,
+                callees: 0,
+                community: '',
+                caveats: [],
+              })
+            }
+          >
+            <span className={`swatch sw-${n.kind ?? 'function'}`} />
+            <span className="where">{n.name}</span>
+            <span className="count">{n.repo_prefix ?? ''}</span>
+          </button>
+        ))}
       </div>
 
       <div className="sym-section">
         <div className="sec-ti">
           <span>Calls</span>
-          <span className="mono faint" style={{ fontSize: 11 }}>{sym.callees} symbols</span>
+          <span className="mono faint" style={{ fontSize: 11 }}>
+            {deps.loading ? '…' : `${calleeNodes.length} symbols`}
+          </span>
         </div>
-        {['pgx.Exec', 'slog.Info', 'validateToken', 'emitEvent', 'writeError']
-          .slice(0, Math.min(5, sym.callees || 3))
-          .map((n, i) => (
-            <div key={i} className="ref">
-              <span className="swatch sw-method" />
-              <span className="where">{n}</span>
-              <span className="count">ext</span>
-            </div>
-          ))}
+        {deps.error && <div className="faint" style={{ fontSize: 11 }}>error: {deps.error}</div>}
+        {!deps.loading && calleeNodes.length === 0 && (
+          <div className="faint" style={{ fontSize: 11 }}>no outgoing dependencies</div>
+        )}
+        {calleeNodes.slice(0, 8).map((n) => (
+          <button
+            type="button"
+            key={n.id}
+            className="ref"
+            style={{ width: '100%', textAlign: 'left' }}
+            onClick={() =>
+              setSym({
+                id: n.id,
+                kind: (n.kind as 'function') ?? 'function',
+                name: n.name,
+                repo: n.repo_prefix ?? '',
+                file: `${n.file_path}:${n.start_line ?? 0}`,
+                sig: '',
+                callers: 0,
+                callees: 0,
+                community: '',
+                caveats: [],
+              })
+            }
+          >
+            <span className={`swatch sw-${n.kind ?? 'method'}`} />
+            <span className="where">{n.name}</span>
+            <span className="count">{n.repo_prefix ?? ''}</span>
+          </button>
+        ))}
       </div>
 
-      <div className="sym-section">
-        <div className="sec-ti">Community</div>
-        <div style={{ fontSize: 12.5 }}>
-          <div className="mono" style={{ color: 'var(--fg-0)' }}>{sym.community}</div>
-          <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
-            cohesion 0.71 · 624 symbols · 41 files
+      {sym.community && (
+        <div className="sym-section">
+          <div className="sec-ti">Community</div>
+          <div style={{ fontSize: 12.5 }}>
+            <div className="mono" style={{ color: 'var(--fg-0)' }}>{sym.community}</div>
           </div>
         </div>
-      </div>
-
-      <div className="sym-section">
-        <div className="sec-ti">Appears in processes</div>
-        <div className="vstack">
-          {PROCESSES.slice(0, 3).map((p) => (
-            <div key={p.id} className="ref">
-              <Icon name="route" size={11} />
-              <span className="where">{p.name}</span>
-              <span className="count">step {p.steps}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="sym-section" style={{ borderBottom: 0 }}>
-        <div className="sec-ti">Ask AI about this</div>
-        <div className="vstack" style={{ gap: 4 }}>
-          {[
-            'What does this do?',
-            'Who breaks if I rename it?',
-            'Why is it on the hot path?',
-            'Suggest a safer refactor',
-          ].map((q, i) => (
-            <button key={i} type="button" className="btn" style={{ justifyContent: 'flex-start', width: '100%' }}>
-              <Icon name="chat" size={11} /> {q}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   )
 }

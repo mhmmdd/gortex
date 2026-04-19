@@ -1,23 +1,23 @@
 'use client'
 
 import { useMemo } from 'react'
-import { REPOS } from '@/lib/seed'
+import type { Repo } from '@/lib/schema'
 import { rnd } from './rng'
 
 type PNode = { x: number; y: number; raw: { nx: number; ny: number; z: number }; color: string; hot: boolean }
 type Plane = {
-  rep: (typeof REPOS)[number]
+  rep: Repo
   z: number
   corners: { x: number; y: number }[]
   nodes: PNode[]
   label: { x: number; y: number }
 }
 
-export function ThreeDStrata() {
+export function ThreeDStrata({ repos }: { repos: Repo[] }) {
   const { planes, rain } = useMemo(() => {
     const r = rnd(31)
-    const planeCount = Math.min(REPOS.length, 7)
-    const ordered = [...REPOS].slice(0, planeCount)
+    const planeCount = Math.min(repos.length, 7)
+    const ordered = repos.slice(0, planeCount)
     const iso = (x: number, y: number, z: number) => ({
       x: 540 + (x - y) * 0.82,
       y: 400 + (x + y) * 0.42 - z,
@@ -57,7 +57,7 @@ export function ThreeDStrata() {
       }
     }
     return { planes, rain }
-  }, [])
+  }, [repos])
 
   return (
     <svg viewBox="0 0 1080 640" width="100%" height="100%">
@@ -76,22 +76,10 @@ export function ThreeDStrata() {
           ))}
           {nodes.slice(0, 10).map((n, j) => {
             const m = nodes[(j * 3 + 2) % nodes.length]
-            return (
-              <line key={`e${j}`} x1={n.x} y1={n.y} x2={m.x} y2={m.y} stroke={rep.color} strokeOpacity="0.28" strokeWidth="0.5" />
-            )
+            return <line key={`e${j}`} x1={n.x} y1={n.y} x2={m.x} y2={m.y} stroke={rep.color} strokeOpacity="0.28" strokeWidth="0.5" />
           })}
           <g>
-            <rect
-              x={label.x - 4}
-              y={label.y - 12}
-              width={rep.id.length * 7 + 20}
-              height={18}
-              rx={3}
-              fill="var(--bg-1)"
-              opacity="0.85"
-              stroke={rep.color}
-              strokeOpacity="0.4"
-            />
+            <rect x={label.x - 4} y={label.y - 12} width={rep.id.length * 7 + 20} height={18} rx={3} fill="var(--bg-1)" opacity="0.85" stroke={rep.color} strokeOpacity="0.4" />
             <circle cx={label.x + 4} cy={label.y - 3} r={3} fill={rep.color} />
             <text x={label.x + 12} y={label.y + 2} fontFamily="JetBrains Mono" fontSize="10.5" fill="var(--fg-1)">
               {rep.id}

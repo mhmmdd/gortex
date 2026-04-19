@@ -1,21 +1,21 @@
 'use client'
 
 import { useMemo } from 'react'
-import { REPOS } from '@/lib/seed'
+import type { Repo } from '@/lib/schema'
 import { rnd } from './rng'
 
-type GNode = { x: number; y: number; z: number; color: string; repo: string; hot: boolean; kind: string }
+type GNode = { x: number; y: number; z: number; color: string; repo: string; hot: boolean }
 type GProj = GNode & { s: number }
 
-export function ThreeDGalaxies() {
+export function ThreeDGalaxies({ repos }: { repos: Repo[] }) {
   const cx = 540
   const cy = 320
 
   const { projected, edges } = useMemo(() => {
     const r = rnd(59)
     const nodes: GNode[] = []
-    REPOS.forEach((rep, idx) => {
-      const a = (idx / REPOS.length) * Math.PI * 2
+    repos.forEach((rep, idx) => {
+      const a = (idx / Math.max(1, repos.length)) * Math.PI * 2
       const gx = cx + Math.cos(a) * 240
       const gy = cy + Math.sin(a) * 150
       const gz = (r() - 0.5) * 200
@@ -31,7 +31,6 @@ export function ThreeDGalaxies() {
           color: rep.color,
           repo: rep.id,
           hot: r() > 0.94,
-          kind: ['function', 'method', 'type', 'interface'][Math.floor(r() * 4)],
         })
       }
     })
@@ -50,12 +49,12 @@ export function ThreeDGalaxies() {
       if (same || r() > 0.82) edges.push({ a, b, same, hot: !same && r() > 0.7 })
     }
     return { projected, edges }
-  }, [])
+  }, [repos])
 
   return (
     <svg viewBox="0 0 1080 640" width="100%" height="100%">
-      {REPOS.map((rep, idx) => {
-        const a = (idx / REPOS.length) * Math.PI * 2
+      {repos.map((rep, idx) => {
+        const a = (idx / Math.max(1, repos.length)) * Math.PI * 2
         const gx = cx + Math.cos(a) * 240
         const gy = cy + Math.sin(a) * 150
         return <circle key={rep.id} cx={gx} cy={gy} r={130} fill={rep.color} fillOpacity="0.05" />
@@ -64,49 +63,21 @@ export function ThreeDGalaxies() {
         const depth = (e.a.z + e.b.z) / 2
         const dim = Math.max(0.12, Math.min(1, (depth + 200) / 500))
         return (
-          <line
-            key={i}
-            x1={e.a.x}
-            y1={e.a.y}
-            x2={e.b.x}
-            y2={e.b.y}
-            stroke={e.hot ? 'var(--pink)' : e.same ? e.a.color : 'var(--accent)'}
-            strokeOpacity={(e.hot ? 0.85 : e.same ? 0.28 : 0.5) * dim}
-            strokeWidth={e.hot ? 1.4 : e.same ? 0.4 : 0.7}
-          />
+          <line key={i} x1={e.a.x} y1={e.a.y} x2={e.b.x} y2={e.b.y} stroke={e.hot ? 'var(--pink)' : e.same ? e.a.color : 'var(--accent)'} strokeOpacity={(e.hot ? 0.85 : e.same ? 0.28 : 0.5) * dim} strokeWidth={e.hot ? 1.4 : e.same ? 0.4 : 0.7} />
         )
       })}
       {projected.map((n, i) => {
         const dim = Math.max(0.35, Math.min(1, (n.z + 200) / 500))
         const size = Math.max(1.2, 2.4 * n.s)
-        return (
-          <circle
-            key={i}
-            cx={n.x}
-            cy={n.y}
-            r={n.hot ? size + 1 : size}
-            fill={n.hot ? 'var(--pink)' : n.color}
-            opacity={0.55 + 0.45 * dim}
-          />
-        )
+        return <circle key={i} cx={n.x} cy={n.y} r={n.hot ? size + 1 : size} fill={n.hot ? 'var(--pink)' : n.color} opacity={0.55 + 0.45 * dim} />
       })}
-      {REPOS.map((rep, idx) => {
-        const a = (idx / REPOS.length) * Math.PI * 2
+      {repos.map((rep, idx) => {
+        const a = (idx / Math.max(1, repos.length)) * Math.PI * 2
         const gx = cx + Math.cos(a) * 300
         const gy = cy + Math.sin(a) * 190
         return (
           <g key={rep.id}>
-            <rect
-              x={gx - 6}
-              y={gy - 11}
-              width={rep.id.length * 7 + 22}
-              height={18}
-              rx={9}
-              fill="var(--bg-1)"
-              opacity="0.8"
-              stroke={rep.color}
-              strokeOpacity="0.5"
-            />
+            <rect x={gx - 6} y={gy - 11} width={rep.id.length * 7 + 22} height={18} rx={9} fill="var(--bg-1)" opacity="0.8" stroke={rep.color} strokeOpacity="0.5" />
             <circle cx={gx + 3} cy={gy - 2} r={3} fill={rep.color} />
             <text x={gx + 11} y={gy + 3} fontFamily="JetBrains Mono" fontSize="10" fill="var(--fg-1)">
               {rep.id}

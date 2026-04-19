@@ -7,17 +7,20 @@ export type NavItem = {
   kbd?: string
 }
 
+// Side-rail navigation. The optional `num` shown next to each item is
+// supplied at render time from /v1/dashboard counts so the rail always
+// reflects the live graph (see SideRail.tsx).
 export const NAV: NavItem[] = [
-  { id: 'dashboard',     href: '/',                label: 'Dashboard',     icon: 'dash',    num: null },
-  { id: 'graph',         href: '/graph',           label: 'Graph',         icon: 'graph',   num: '13,963' },
-  { id: 'search',        href: '/search',          label: 'Search',        icon: 'search',  num: null, kbd: '⌘K' },
-  { id: 'communities',   href: '/communities',     label: 'Communities',   icon: 'users',   num: '384' },
-  { id: 'processes',     href: '/processes',       label: 'Processes',     icon: 'route',   num: '127' },
-  { id: 'contracts',     href: '/contracts',       label: 'Contracts',     icon: 'plug',    num: '188' },
-  { id: 'services',      href: '/services',        label: 'Services',      icon: 'service', num: '8' },
-  { id: 'investigations',href: '/investigations',  label: 'Investigations',icon: 'flask',   num: '6' },
-  { id: 'caveats',       href: '/caveats',         label: 'Caveats',       icon: 'warn',    num: '42' },
-  { id: 'guards',        href: '/guards',          label: 'Guards',        icon: 'beaker',  num: '5' },
+  { id: 'dashboard',     href: '/',                label: 'Dashboard',     icon: 'dash' },
+  { id: 'graph',         href: '/graph',           label: 'Graph',         icon: 'graph' },
+  { id: 'search',        href: '/search',          label: 'Search',        icon: 'search', kbd: '⌘K' },
+  { id: 'communities',   href: '/communities',     label: 'Communities',   icon: 'users' },
+  { id: 'processes',     href: '/processes',       label: 'Processes',     icon: 'route' },
+  { id: 'contracts',     href: '/contracts',       label: 'Contracts',     icon: 'plug' },
+  { id: 'services',      href: '/services',        label: 'Services',      icon: 'service' },
+  { id: 'investigations',href: '/investigations',  label: 'Investigations',icon: 'flask' },
+  { id: 'caveats',       href: '/caveats',         label: 'Caveats',       icon: 'warn' },
+  { id: 'guards',        href: '/guards',          label: 'Guards',        icon: 'beaker' },
 ]
 
 export const PAGE_CRUMBS: Record<string, { label: string; href?: string }[]> = {

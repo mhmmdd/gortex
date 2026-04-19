@@ -1,5 +1,12 @@
 'use client'
 
+// Sankey view: aspirational illustration of an entry → handler → core →
+// store → emit pipeline. The flow magnitudes here are static because the
+// indexer does not record runtime traffic — only call topology, which
+// the Constellation, Hierarchy, and 3D modes already render. Replace
+// with real data when a tracing source (e.g. OpenTelemetry ingest) is
+// wired in. See web/AGENTS.md.
+
 const cols = [
   {
     title: 'Entry',

@@ -1,16 +1,16 @@
 'use client'
 
 import { useMemo } from 'react'
-import { REPOS } from '@/lib/seed'
+import type { Repo } from '@/lib/schema'
 import { rnd } from './rng'
 
 type Building = { x0: number; y0: number; x1: number; y1: number; h: number; color: string; hot: boolean }
-type District = { rep: (typeof REPOS)[number]; ox: number; oy: number; w: number; h: number; buildings: Building[] }
+type District = { rep: Repo; ox: number; oy: number; w: number; h: number; buildings: Building[] }
 
-export function ThreeDCity() {
+export function ThreeDCity({ repos }: { repos: Repo[] }) {
   const districts = useMemo<District[]>(() => {
     const r = rnd(71)
-    return REPOS.map((rep, idx) => {
+    return repos.map((rep, idx) => {
       const col = idx % 4
       const row = Math.floor(idx / 4)
       const ox = -440 + col * 230
@@ -41,19 +41,12 @@ export function ThreeDCity() {
       }
       return { rep, ox, oy, w, h, buildings }
     })
-  }, [])
+  }, [repos])
 
   const iso = (x: number, y: number, z: number) => ({
     x: 540 + (x - y) * 0.82,
     y: 340 + (x + y) * 0.46 - z,
   })
-
-  const bridges: [number, number][] = [
-    [0, 1],
-    [1, 3],
-    [0, 4],
-    [2, 5],
-  ]
 
   function drawBox(b: Building, i: number) {
     const t1 = iso(b.x0, b.y0, b.h)
@@ -67,30 +60,9 @@ export function ThreeDCity() {
     const strokeC = b.hot ? 'var(--pink)' : b.color
     return (
       <g key={i}>
-        <polygon
-          points={`${t2.x},${t2.y} ${t3.x},${t3.y} ${r2.x},${r2.y} ${r1.x},${r1.y}`}
-          fill={b.color}
-          fillOpacity="0.22"
-          stroke={strokeC}
-          strokeOpacity="0.7"
-          strokeWidth="0.5"
-        />
-        <polygon
-          points={`${t4.x},${t4.y} ${t3.x},${t3.y} ${f2.x},${f2.y} ${f1.x},${f1.y}`}
-          fill={b.color}
-          fillOpacity="0.32"
-          stroke={strokeC}
-          strokeOpacity="0.7"
-          strokeWidth="0.5"
-        />
-        <polygon
-          points={`${t1.x},${t1.y} ${t2.x},${t2.y} ${t3.x},${t3.y} ${t4.x},${t4.y}`}
-          fill={b.hot ? 'var(--pink)' : b.color}
-          fillOpacity={b.hot ? 0.6 : 0.45}
-          stroke={strokeC}
-          strokeOpacity="0.9"
-          strokeWidth="0.6"
-        />
+        <polygon points={`${t2.x},${t2.y} ${t3.x},${t3.y} ${r2.x},${r2.y} ${r1.x},${r1.y}`} fill={b.color} fillOpacity="0.22" stroke={strokeC} strokeOpacity="0.7" strokeWidth="0.5" />
+        <polygon points={`${t4.x},${t4.y} ${t3.x},${t3.y} ${f2.x},${f2.y} ${f1.x},${f1.y}`} fill={b.color} fillOpacity="0.32" stroke={strokeC} strokeOpacity="0.7" strokeWidth="0.5" />
+        <polygon points={`${t1.x},${t1.y} ${t2.x},${t2.y} ${t3.x},${t3.y} ${t4.x},${t4.y}`} fill={b.hot ? 'var(--pink)' : b.color} fillOpacity={b.hot ? 0.6 : 0.45} stroke={strokeC} strokeOpacity="0.9" strokeWidth="0.6" />
       </g>
     )
   }
@@ -114,10 +86,12 @@ export function ThreeDCity() {
           [d.ox + d.w + 8, d.oy + d.h + 8],
           [d.ox - 8, d.oy + d.h + 8],
         ]
-        const pts = c.map(([x, y]) => {
-          const p = iso(x, y, 0)
-          return `${p.x},${p.y}`
-        }).join(' ')
+        const pts = c
+          .map(([x, y]) => {
+            const p = iso(x, y, 0)
+            return `${p.x},${p.y}`
+          })
+          .join(' ')
         const label = iso(d.ox, d.oy - 8, 0)
         return (
           <g key={d.rep.id}>
@@ -130,25 +104,6 @@ export function ThreeDCity() {
               </text>
             </g>
           </g>
-        )
-      })}
-      {bridges.map(([a, b], i) => {
-        const da = districts[a]
-        const db = districts[b]
-        if (!da || !db) return null
-        const pa = iso(da.ox + da.w / 2, da.oy + da.h / 2, 90)
-        const pb = iso(db.ox + db.w / 2, db.oy + db.h / 2, 90)
-        const mid = { x: (pa.x + pb.x) / 2, y: Math.min(pa.y, pb.y) - 30 }
-        return (
-          <path
-            key={i}
-            d={`M${pa.x},${pa.y} Q${mid.x},${mid.y} ${pb.x},${pb.y}`}
-            fill="none"
-            stroke="var(--accent)"
-            strokeOpacity="0.5"
-            strokeWidth="1.3"
-            strokeDasharray="4 3"
-          />
         )
       })}
     </svg>
