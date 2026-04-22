@@ -24,20 +24,23 @@ type CrossRepoStats struct {
 // (which is O(N) per import edge, O(N×M) total). Maps are nil between
 // passes so we don't pay the memory cost while idle.
 //
-// mu serializes the Resolve* methods. Both reset and repopulate the
-// scratch maps at the start of every call, so concurrent invocations
-// (multi-watcher firing on different repos at the same time) would
-// crash with "concurrent map writes" without a lock.
+// mu is the graph-wide resolver lock shared with every Resolver built
+// from the same Graph. Private to CrossRepoResolver wasn't enough:
+// MultiWatcher.forwardEvents calls ResolveForRepo while the per-repo
+// Watcher's debounce timer concurrently calls Resolver.ResolveFile,
+// and both paths iterate graph.AllEdges() / AllNodes() and mutate
+// Edge.To in place. Sharing g.ResolveMutex() serialises both resolver
+// types against the same graph.
 type CrossRepoResolver struct {
 	graph        *graph.Graph
 	dirIndex     map[string][]*graph.Node
 	lastDirIndex map[string][]*graph.Node
-	mu           sync.Mutex
+	mu           *sync.Mutex
 }
 
 // NewCrossRepo creates a CrossRepoResolver for the given graph.
 func NewCrossRepo(g *graph.Graph) *CrossRepoResolver {
-	return &CrossRepoResolver{graph: g}
+	return &CrossRepoResolver{graph: g, mu: g.ResolveMutex()}
 }
 
 // ResolveAll resolves all unresolved edges in the graph, trying same-repo

@@ -59,6 +59,41 @@ func TestCrossRepoResolver_ConcurrentResolveForRepo(t *testing.T) {
 	wg.Wait()
 }
 
+// TestResolver_CrossRepoResolver_SerializeOnGraph pins the cross-type
+// race reported in the daemon: the per-repo Watcher's debounce timer
+// fires Resolver.ResolveFile (which holds g.ResolveMutex) while
+// MultiWatcher.forwardEvents fires CrossRepoResolver.ResolveForRepo.
+// Both iterate graph.AllEdges()/AllNodes() and rewrite Edge.To in
+// place on the shared graph, so they must share the same lock — not
+// two different ones. Without the shared mu pointer, `go test -race`
+// flags edge mutations between the two resolver types.
+func TestResolver_CrossRepoResolver_SerializeOnGraph(t *testing.T) {
+	g := buildSmallGraph(t)
+	r := New(g)
+	cr := NewCrossRepo(g)
+
+	const iters = 200
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			_ = r.ResolveFile("a.go")
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			_ = cr.ResolveForRepo("repo-a")
+		}
+	}()
+
+	wg.Wait()
+}
+
 // buildSmallGraph populates a graph with a handful of file nodes plus
 // one unresolved edge so the resolver actually has work to do during
 // the race test. The shape doesn't matter — only that buildDirIndexes
