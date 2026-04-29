@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,17 +11,25 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/zzet/gortex/internal/agents"
+	"github.com/zzet/gortex/internal/graph"
 )
+
+// errPathUnresolved is returned when a relative path cannot be anchored to any
+// indexed repo. Callers should surface this as a clear error rather than letting
+// os.Open resolve it against the daemon process CWD, which is unrelated to any
+// repo and silently produces wrong results.
+var errPathUnresolved = errors.New("path is not absolute and no indexed repo could anchor it")
 
 // resolveFilePath turns a user-supplied path into the absolute filesystem
 // path the write should target. Accepts:
 //   - absolute paths, used as-is
 //   - repo-prefixed paths (e.g. "gortex/internal/foo.go" in multi-repo mode)
-//   - paths relative to the single indexer's root
-//   - paths relative to the process CWD (last-resort fallback)
+//   - paths relative to the single indexer's root (single-repo mode only)
 //
 // Returns the absolute path and the repo-relative form suitable for
-// session bookkeeping (or the absolute path again when no repo matches).
+// session bookkeeping. In multi-repo mode, a bare-relative path with no
+// repo prefix is ambiguous — there is no implicit "primary repo" — so it
+// returns ("", "") and the caller must surface an error to the agent.
 func (s *Server) resolveFilePath(rawPath string) (absPath, relPath string) {
 	if rawPath == "" {
 		return "", ""
@@ -35,6 +44,9 @@ func (s *Server) resolveFilePath(rawPath string) (absPath, relPath string) {
 		if p := s.multiIndexer.ResolveFilePath(rawPath); p != "" {
 			return filepath.Clean(p), rawPath
 		}
+		// Multi-repo mode without a recognised prefix: ambiguous.
+		// Refuse rather than fall through to the daemon's process CWD.
+		return "", ""
 	}
 
 	if s.indexer != nil {
@@ -44,11 +56,37 @@ func (s *Server) resolveFilePath(rawPath string) (absPath, relPath string) {
 		}
 	}
 
-	abs, err := filepath.Abs(rawPath)
-	if err != nil {
-		abs = filepath.Clean(rawPath)
+	return "", ""
+}
+
+// resolveNodePath returns the absolute filesystem path for a graph node.
+// Uses node.RepoPrefix to find the owning repo's root in multi-repo mode;
+// falls back to the lone indexer's RootPath in single-repo mode. Returns an
+// error (not a relative path) when no repo root is available, to keep callers
+// from passing a bare-relative path to os.Open and resolving against the
+// daemon process CWD.
+func (s *Server) resolveNodePath(node *graph.Node) (string, error) {
+	if node == nil {
+		return "", errors.New("nil node")
 	}
-	return abs, s.repoRelative(abs)
+	if node.FilePath == "" {
+		return "", fmt.Errorf("node %q has no file path", node.ID)
+	}
+	if filepath.IsAbs(node.FilePath) {
+		return filepath.Clean(node.FilePath), nil
+	}
+	if s.multiIndexer != nil {
+		if root, ok := s.multiIndexer.RepoRoot(node.RepoPrefix); ok {
+			return filepath.Clean(filepath.Join(root, node.FilePath)), nil
+		}
+		return "", fmt.Errorf("could not resolve repo root for node %q (repo_prefix=%q)", node.ID, node.RepoPrefix)
+	}
+	if s.indexer != nil {
+		if root := s.indexer.RootPath(); root != "" {
+			return filepath.Clean(filepath.Join(root, node.FilePath)), nil
+		}
+	}
+	return "", fmt.Errorf("%w: node=%q file=%q", errPathUnresolved, node.ID, node.FilePath)
 }
 
 // repoRelative converts an absolute path to a repo-prefixed or root-relative

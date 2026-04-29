@@ -433,19 +433,15 @@ func (s *Server) handleGetSymbolSource(ctx context.Context, req mcp.CallToolRequ
 	contextLines := req.GetInt("context_lines", 3)
 
 	// Resolve the file path against whichever indexer owns the repo.
-	// Multi-repo mode must be checked first — each repo has its own
-	// root, so the single-root fallback would produce the wrong path
-	// for any non-primary repo.
-	absPath := node.FilePath
-	if s.multiIndexer != nil {
-		if resolved := s.multiIndexer.ResolveFilePath(node.FilePath); resolved != "" {
-			absPath = resolved
-		}
-	}
-	if absPath == node.FilePath && s.indexer != nil {
-		if root := s.indexer.RootPath(); root != "" {
-			absPath = filepath.Join(root, node.FilePath)
-		}
+	// Multi-repo mode is the source of truth — node.RepoPrefix names
+	// the owning repo and MultiIndexer holds its RootPath. Single-repo
+	// mode falls back to the lone indexer's RootPath. Bare-relative
+	// paths must never reach readLines: os.Open would resolve them
+	// against the daemon process cwd, which is unrelated to any repo
+	// and silently produces wrong results.
+	absPath, resolveErr := s.resolveNodePath(node)
+	if resolveErr != nil {
+		return mcp.NewToolResultError(resolveErr.Error()), nil
 	}
 
 	source, startLine, totalFileChars, err := readLines(absPath, node.StartLine, node.EndLine, contextLines)
@@ -591,18 +587,14 @@ func (s *Server) handleBatchSymbols(ctx context.Context, req mcp.CallToolRequest
 
 		// Source code (optional).
 		if includeSource && node.StartLine > 0 && node.EndLine > 0 {
-			absPath := node.FilePath
-			if s.indexer != nil {
-				if root := s.indexer.RootPath(); root != "" {
-					absPath = filepath.Join(root, node.FilePath)
+			if absPath, err := s.resolveNodePath(node); err == nil {
+				if source, fromLine, totalFileChars, err := readLines(absPath, node.StartLine, node.EndLine, contextLines); err == nil {
+					entry["source"] = source
+					entry["from_line"] = fromLine
+					returned := tokens.CountInt64(source)
+					fullFile := int64(tokens.EstimateFromSample(totalFileChars, source))
+					s.tokenStatsFor(ctx).record(node, returned, fullFile)
 				}
-			}
-			if source, fromLine, totalFileChars, err := readLines(absPath, node.StartLine, node.EndLine, contextLines); err == nil {
-				entry["source"] = source
-				entry["from_line"] = fromLine
-				returned := tokens.CountInt64(source)
-				fullFile := int64(tokens.EstimateFromSample(totalFileChars, source))
-				s.tokenStatsFor(ctx).record(node, returned, fullFile)
 			}
 		}
 
@@ -782,14 +774,10 @@ func (s *Server) handleSuggestPattern(_ context.Context, req mcp.CallToolRequest
 
 	// 1. Get the example source.
 	if node.StartLine > 0 && node.EndLine > 0 {
-		absPath := node.FilePath
-		if s.indexer != nil {
-			if root := s.indexer.RootPath(); root != "" {
-				absPath = filepath.Join(root, node.FilePath)
+		if absPath, err := s.resolveNodePath(node); err == nil {
+			if source, _, _, err := readLines(absPath, node.StartLine, node.EndLine, 0); err == nil {
+				result["example_source"] = source
 			}
-		}
-		if source, _, _, err := readLines(absPath, node.StartLine, node.EndLine, 0); err == nil {
-			result["example_source"] = source
 		}
 	}
 	if sig, ok := node.Meta["signature"]; ok {
@@ -831,14 +819,10 @@ func (s *Server) handleSuggestPattern(_ context.Context, req mcp.CallToolRequest
 		}
 		// Get the registration source (the caller function that wires this symbol).
 		if cn.StartLine > 0 && cn.EndLine > 0 {
-			absPath := cn.FilePath
-			if s.indexer != nil {
-				if root := s.indexer.RootPath(); root != "" {
-					absPath = filepath.Join(root, cn.FilePath)
+			if absPath, err := s.resolveNodePath(cn); err == nil {
+				if source, _, _, err := readLines(absPath, cn.StartLine, cn.EndLine, 0); err == nil {
+					entry["source"] = source
 				}
-			}
-			if source, _, _, err := readLines(absPath, cn.StartLine, cn.EndLine, 0); err == nil {
-				entry["source"] = source
 			}
 		}
 		registration = append(registration, entry)
@@ -865,14 +849,10 @@ func (s *Server) handleSuggestPattern(_ context.Context, req mcp.CallToolRequest
 			}
 			// Get test source.
 			if tn.StartLine > 0 && tn.EndLine > 0 {
-				absPath := tn.FilePath
-				if s.indexer != nil {
-					if root := s.indexer.RootPath(); root != "" {
-						absPath = filepath.Join(root, tn.FilePath)
+				if absPath, err := s.resolveNodePath(tn); err == nil {
+					if source, _, _, err := readLines(absPath, tn.StartLine, tn.EndLine, 0); err == nil {
+						entry["source"] = source
 					}
-				}
-				if source, _, _, err := readLines(absPath, tn.StartLine, tn.EndLine, 0); err == nil {
-					entry["source"] = source
 				}
 			}
 			testPatterns = append(testPatterns, entry)
@@ -1210,18 +1190,14 @@ func (s *Server) handleSmartContext(ctx context.Context, req mcp.CallToolRequest
 		if sourcesEmbedded < maxSource &&
 			(sym.Kind == graph.KindFunction || sym.Kind == graph.KindMethod) &&
 			sym.StartLine > 0 && sym.EndLine > 0 {
-			absPath := sym.FilePath
-			if s.indexer != nil {
-				if root := s.indexer.RootPath(); root != "" {
-					absPath = filepath.Join(root, sym.FilePath)
+			if absPath, err := s.resolveNodePath(sym); err == nil {
+				if source, _, totalFileChars, err := readLines(absPath, sym.StartLine, sym.EndLine, 0); err == nil {
+					entry["source"] = source
+					sourcesEmbedded++
+					returned := tokens.CountInt64(source)
+					fullFile := int64(tokens.EstimateFromSample(totalFileChars, source))
+					s.tokenStatsFor(ctx).record(sym, returned, fullFile)
 				}
-			}
-			if source, _, totalFileChars, err := readLines(absPath, sym.StartLine, sym.EndLine, 0); err == nil {
-				entry["source"] = source
-				sourcesEmbedded++
-				returned := tokens.CountInt64(source)
-				fullFile := int64(tokens.EstimateFromSample(totalFileChars, source))
-				s.tokenStatsFor(ctx).record(sym, returned, fullFile)
 			}
 		}
 		symbolContexts = append(symbolContexts, entry)
@@ -1572,11 +1548,9 @@ func (s *Server) handleEditSymbol(ctx context.Context, req mcp.CallToolRequest) 
 	}
 
 	// Resolve file path.
-	absPath := node.FilePath
-	if s.indexer != nil {
-		if root := s.indexer.RootPath(); root != "" {
-			absPath = filepath.Join(root, node.FilePath)
-		}
+	absPath, err := s.resolveNodePath(node)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	// Read the entire file.

@@ -543,19 +543,17 @@ func (s *Server) handlePrefetchContext(ctx context.Context, req mcp.CallToolRequ
 	}
 
 	// Include source for top 5 if requested
-	if includeSource && s.indexer != nil {
+	if includeSource {
 		for i := range candidates {
 			if i >= 5 {
 				break
 			}
 			n := candidates[i].Node
 			if n.StartLine > 0 && n.EndLine > 0 {
-				absPath := n.FilePath
-				if root := s.indexer.RootPath(); root != "" {
-					absPath = filepath.Join(root, n.FilePath)
-				}
-				if source, _, _, err := readLines(absPath, n.StartLine, n.EndLine, 0); err == nil {
-					candidates[i].Source = source
+				if absPath, err := s.resolveNodePath(n); err == nil {
+					if source, _, _, err := readLines(absPath, n.StartLine, n.EndLine, 0); err == nil {
+						candidates[i].Source = source
+					}
 				}
 			}
 		}
@@ -955,13 +953,11 @@ func (s *Server) handleDiffContext(_ context.Context, req mcp.CallToolRequest) (
 		}
 
 		// Source
-		if node.StartLine > 0 && node.EndLine > 0 && s.indexer != nil {
-			absPath := node.FilePath
-			if root := s.indexer.RootPath(); root != "" {
-				absPath = filepath.Join(root, node.FilePath)
-			}
-			if source, _, _, readErr := readLines(absPath, node.StartLine, node.EndLine, 0); readErr == nil {
-				info.Source = source
+		if node.StartLine > 0 && node.EndLine > 0 {
+			if absPath, err := s.resolveNodePath(node); err == nil {
+				if source, _, _, readErr := readLines(absPath, node.StartLine, node.EndLine, 0); readErr == nil {
+					info.Source = source
+				}
 			}
 		}
 
@@ -1411,11 +1407,16 @@ func (s *Server) handleBatchEdit(_ context.Context, req mcp.CallToolRequest) (*m
 		}
 
 		// Resolve file path
-		absPath := node.FilePath
-		if s.indexer != nil {
-			if root := s.indexer.RootPath(); root != "" {
-				absPath = filepath.Join(root, node.FilePath)
-			}
+		absPath, resolveErr := s.resolveNodePath(node)
+		if resolveErr != nil {
+			results = append(results, batchEditResult{
+				SymbolID: o.edit.SymbolID,
+				FilePath: node.FilePath,
+				Status:   "failed",
+				Error:    resolveErr.Error(),
+			})
+			failed = true
+			continue
 		}
 
 		// Read file

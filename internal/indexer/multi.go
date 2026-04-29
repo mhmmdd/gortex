@@ -780,6 +780,22 @@ func (mi *MultiIndexer) ResolveFilePath(prefixedPath string) string {
 	return ""
 }
 
+// RepoRoot returns the local filesystem root for the given repo prefix.
+// ok is true only when the prefix is registered AND meta.RootPath is non-empty.
+// Caller is responsible for joining repo-relative file paths against the root.
+func (mi *MultiIndexer) RepoRoot(repoPrefix string) (string, bool) {
+	if repoPrefix == "" {
+		return "", false
+	}
+	mi.mu.RLock()
+	defer mi.mu.RUnlock()
+	meta, ok := mi.repos[repoPrefix]
+	if !ok || meta == nil || meta.RootPath == "" {
+		return "", false
+	}
+	return meta.RootPath, true
+}
+
 // MergedContractRegistry combines contract registries from all per-repo
 // indexers into a single registry. In multi-repo mode each repo's indexer
 // runs extractContracts independently; this merges the results.

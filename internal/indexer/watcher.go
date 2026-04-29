@@ -130,11 +130,12 @@ func (w *Watcher) Start(paths []string) error {
 	}
 	ready := make(chan struct{})
 	opts := []fswatcher.WatcherOpt{
-		// 1ms is the smallest cooldown the library accepts. Setting it
-		// minimal keeps fswatcher's aggregator from merging events for
-		// the same path across our debounce window — our per-file
-		// debounce + storm-mode logic stays the authoritative coalescer.
-		fswatcher.WithCooldown(time.Millisecond),
+		// Disable fswatcher's internal debouncer. Its mergeEvents path
+		// mutates the Types backing array of an already-delivered event
+		// when a follow-up event for the same path arrives, racing with
+		// our consumer's read. Our per-file debounce + storm-mode logic
+		// is the authoritative coalescer anyway.
+		fswatcher.WithCooldown(0),
 		// Drop the library's own logging chatter; we surface what we
 		// care about through our own logger.
 		fswatcher.WithSeverity(fswatcher.SeverityError),
