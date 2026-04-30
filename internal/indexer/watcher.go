@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -62,6 +63,11 @@ type Watcher struct {
 	symbolChangeCb   SymbolChangeCallback
 	symbolChangeCbMu sync.RWMutex
 
+	// probeWaiters maps a probe-file path (created during Start to confirm
+	// the inotify watch is active) to a chan that handleEvent closes when
+	// the probe's event arrives. Empty after Start returns.
+	probeWaiters sync.Map
+
 	// Storm-mode state. Guarded by stormMu so the hot per-file
 	// debounce path (mu) doesn't contend with rate-tracking.
 	stormMu      sync.Mutex
@@ -73,6 +79,11 @@ type Watcher struct {
 }
 
 const maxHistory = 1000
+
+// probeMarker is the substring embedded in handshake-probe filenames
+// (see confirmWatchActive) and used by handleEvent to absorb their
+// create/remove events without touching the indexer.
+const probeMarker = ".gortex-watcher-handshake-"
 
 // NewWatcher creates a Watcher for the given indexer.
 //
@@ -144,11 +155,13 @@ func (w *Watcher) Start(paths []string) error {
 		// stream registration and silently disappear.
 		fswatcher.WithReadyChannel(ready),
 	}
+	absPaths := make([]string, 0, len(paths))
 	for _, p := range paths {
 		absPath, err := filepath.Abs(p)
 		if err != nil {
 			return err
 		}
+		absPaths = append(absPaths, absPath)
 		opts = append(opts, fswatcher.WithPath(absPath))
 	}
 	fsw, err := fswatcher.New(opts...)
@@ -191,7 +204,63 @@ func (w *Watcher) Start(paths []string) error {
 		w.drainInitialReplay(150 * time.Millisecond)
 	}
 	go w.loop()
+	// On Linux, fswatcher closes its ready channel as soon as the
+	// inotify FD is allocated, but it registers initial paths in
+	// background goroutines that may not have called inotify_add_watch
+	// yet. Events fired before those goroutines run are lost forever.
+	// Probe each path with a sentinel file and wait for the resulting
+	// event before declaring the watcher ready.
+	if runtime.GOOS != "darwin" {
+		for _, p := range absPaths {
+			if err := w.confirmWatchActive(p, 5*time.Second); err != nil {
+				cancel()
+				if w.fsw != nil {
+					w.fsw.Close()
+				}
+				close(w.done)
+				<-w.stopped
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+// confirmWatchActive writes sentinel files under root in a polling loop
+// until the corresponding fswatcher event arrives — proving the
+// OS-level watch is registered — or the overall timeout fires. The
+// retry loop is needed because the first probe may be written before
+// fswatcher's async addWatch goroutine has called inotify_add_watch,
+// in which case its create event is invisible to inotify entirely.
+//
+// The sentinel name avoids fswatcher's built-in isSystemFile filter
+// (which drops *.tmp / *.bak / *.swp / etc. before they reach our
+// handleEvent) and our own excludes matcher.
+func (w *Watcher) confirmWatchActive(root string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	const probeStep = 100 * time.Millisecond
+	for time.Now().Before(deadline) {
+		probe := filepath.Join(root, fmt.Sprintf("%s%d-%d", probeMarker, os.Getpid(), time.Now().UnixNano()))
+		ch := make(chan struct{})
+		w.probeWaiters.Store(probe, ch)
+		if err := os.WriteFile(probe, nil, 0o600); err != nil {
+			w.probeWaiters.Delete(probe)
+			if w.logger != nil {
+				w.logger.Warn("watcher: could not write probe; continuing without confirmation",
+					zap.String("root", root), zap.Error(err))
+			}
+			return nil
+		}
+		select {
+		case <-ch:
+			_ = os.Remove(probe)
+			return nil
+		case <-time.After(probeStep):
+			w.probeWaiters.Delete(probe)
+			_ = os.Remove(probe)
+		}
+	}
+	return fmt.Errorf("watcher: inotify watch on %s did not activate within %s", root, timeout)
 }
 
 // drainInitialReplay reads from the backend's events channel until
@@ -289,6 +358,20 @@ func (w *Watcher) loop() {
 
 func (w *Watcher) handleEvent(event fswatcher.WatchEvent) {
 	path := normalizeEventPath(event.Path, w.indexer.rootPath)
+
+	// Probe artifacts: sentinel files Start writes to confirm the
+	// OS-level watch is actually active. Their create event signals
+	// the registered waiter; their remove event (after Start removes
+	// the file) is silently absorbed so it never reaches user-visible
+	// event consumers.
+	if strings.Contains(filepath.Base(path), probeMarker) {
+		if v, loaded := w.probeWaiters.LoadAndDelete(path); loaded {
+			if ch, ok := v.(chan struct{}); ok {
+				close(ch)
+			}
+		}
+		return
+	}
 
 	// Skip events from excluded paths. A single matcher call covers
 	// what the old code split across inExcludedDir + isExcluded.
