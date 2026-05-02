@@ -23,6 +23,7 @@ import (
 	"github.com/zzet/gortex/internal/progress"
 	"github.com/zzet/gortex/internal/resolver"
 	"github.com/zzet/gortex/internal/search"
+	"github.com/zzet/gortex/internal/codegen"
 	"github.com/zzet/gortex/internal/codeowners"
 	"github.com/zzet/gortex/internal/licenses"
 	"github.com/zzet/gortex/internal/semantic"
@@ -535,6 +536,24 @@ func (idx *Indexer) applyCoverageDomains(relPath, lang string, src []byte, resul
 				result.Nodes = append(result.Nodes, teamNodes...)
 				result.Edges = append(result.Edges, teamEdges...)
 			}
+		}
+	}
+	if idx.config.Coverage.IsEnabled("codegen") {
+		if marker := codegen.Scan(src); marker.Generated {
+			// Stamp the marker on the file node when the language
+			// extractor produced one. Generated files without a
+			// file-shaped result node still get the EdgeGeneratedBy
+			// edge so downstream walks pick them up.
+			for _, n := range result.Nodes {
+				if n.Kind == graph.KindFile && n.FilePath == relPath {
+					if n.Meta == nil {
+						n.Meta = map[string]any{}
+					}
+					codegen.MarkFileNode(n.Meta, marker)
+					break
+				}
+			}
+			result.Edges = append(result.Edges, codegen.BuildGraphArtifacts(relPath, marker)...)
 		}
 	}
 	if !idx.config.Coverage.IsEnabled("function_shape") {
