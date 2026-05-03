@@ -32,6 +32,7 @@ import (
 	"github.com/zzet/gortex/internal/resolver"
 	"github.com/zzet/gortex/internal/search"
 	"github.com/zzet/gortex/internal/semantic"
+	gortexsql "github.com/zzet/gortex/internal/sql"
 	"github.com/zzet/gortex/internal/todos"
 )
 
@@ -586,23 +587,83 @@ func (idx *Indexer) applyCoverageDomains(relPath, lang string, src []byte, resul
 	if !idx.config.Coverage.IsEnabled("configs") {
 		stripConfigArtifacts(result)
 	}
+	if idx.config.Coverage.IsEnabled("sql") {
+		applyMigrationExtraction(relPath, src, result)
+	}
 	if !idx.config.Coverage.IsEnabled("sql") {
 		stripSQLArtifacts(result)
 	}
 }
 
-// stripSQLArtifacts drops KindTable nodes plus EdgeQueries edges
-// when the sql coverage domain is gated off. Mirrors the strip
-// passes for flags / configs / observability — endpoint-aware so
-// any leftover edges to stripped table nodes are pruned. SQL
-// extraction defaults off because string-literal pattern matching
-// against db.Get / db.Query / db.Exec produces false positives
-// when domain code shares method names (cache.Get, etc.).
+// applyMigrationExtraction detects when a file looks like a SQL
+// migration (path under migrate/ or migrations/) and parses
+// CREATE TABLE statements out of its source. Each declared table
+// is emitted as a KindTable node alongside the synthetic
+// KindMigration node for the file itself, with EdgeProvides edges
+// from migration → table so reverse-walk queries answer "which
+// migrations create this table". Migration tables use the
+// generic dialect since the .sql file by itself doesn't tell us
+// which dialect the application targets — agents that care about
+// dialect can join through the file path or surrounding go.mod.
+func applyMigrationExtraction(relPath string, src []byte, result *parser.ExtractionResult) {
+	if !gortexsql.IsMigrationPath(relPath) {
+		return
+	}
+	tables := gortexsql.ExtractCreateTables(string(src))
+	if len(tables) == 0 {
+		return
+	}
+	migrationID := gortexsql.MigrationNodeID(relPath)
+	result.Nodes = append(result.Nodes, &graph.Node{
+		ID:       migrationID,
+		Kind:     graph.KindMigration,
+		Name:     filepath.Base(relPath),
+		FilePath: relPath,
+		Language: "sql",
+		Meta: map[string]any{
+			"dialect": "generic",
+		},
+	})
+	for _, t := range tables {
+		tableID := gortexsql.TableNodeID("generic", t.Schema, t.Table)
+		meta := map[string]any{
+			"table":   t.Table,
+			"dialect": "generic",
+		}
+		if t.Schema != "" {
+			meta["schema"] = t.Schema
+		}
+		result.Nodes = append(result.Nodes, &graph.Node{
+			ID:       tableID,
+			Kind:     graph.KindTable,
+			Name:     t.Table,
+			FilePath: relPath,
+			Language: "sql",
+			Meta:     meta,
+		})
+		result.Edges = append(result.Edges, &graph.Edge{
+			From:     migrationID,
+			To:       tableID,
+			Kind:     graph.EdgeProvides,
+			FilePath: relPath,
+			Origin:   graph.OriginASTResolved,
+		})
+	}
+}
+
+// stripSQLArtifacts drops KindTable + KindMigration nodes plus
+// the matching EdgeQueries / EdgeProvides edges when the sql
+// coverage domain is gated off. Mirrors the strip passes for
+// flags / configs / observability — endpoint-aware so any
+// leftover edges to stripped nodes are pruned. SQL extraction
+// defaults off because string-literal pattern matching against
+// db.Get / db.Query / db.Exec produces false positives when
+// domain code shares method names (cache.Get, etc.).
 func stripSQLArtifacts(result *parser.ExtractionResult) {
 	stripped := make(map[string]struct{})
 	keptNodes := result.Nodes[:0]
 	for _, n := range result.Nodes {
-		if n.Kind == graph.KindTable {
+		if n.Kind == graph.KindTable || n.Kind == graph.KindMigration {
 			stripped[n.ID] = struct{}{}
 			continue
 		}
@@ -612,6 +673,9 @@ func stripSQLArtifacts(result *parser.ExtractionResult) {
 	keptEdges := result.Edges[:0]
 	for _, e := range result.Edges {
 		if e.Kind == graph.EdgeQueries {
+			continue
+		}
+		if _, ok := stripped[e.From]; ok {
 			continue
 		}
 		if _, ok := stripped[e.To]; ok {

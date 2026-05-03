@@ -142,6 +142,106 @@ func TestSplitSchemaTable(t *testing.T) {
 	}
 }
 
+func TestExtractCreateTables_Basic(t *testing.T) {
+	src := `CREATE TABLE users (
+    id BIGINT PRIMARY KEY,
+    email TEXT UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    user_id BIGINT REFERENCES users(id),
+    token TEXT
+);
+`
+	refs := ExtractCreateTables(src)
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 refs, got %d: %+v", len(refs), refs)
+	}
+	got := map[string]bool{}
+	for _, r := range refs {
+		got[r.Table] = true
+		if r.Op != "create" {
+			t.Errorf("op = %q, want create", r.Op)
+		}
+	}
+	if !got["users"] || !got["sessions"] {
+		t.Errorf("missing tables: %v", got)
+	}
+}
+
+func TestExtractCreateTables_Variants(t *testing.T) {
+	src := `
+CREATE TEMPORARY TABLE t1 (id INT);
+CREATE TEMP TABLE t2 (id INT);
+CREATE GLOBAL TEMPORARY TABLE t3 (id INT);
+CREATE UNLOGGED TABLE t4 (id INT);
+CREATE TABLE IF NOT EXISTS t5 (id INT);
+CREATE TABLE "quoted_name" (id INT);
+CREATE TABLE auth.tokens (id INT);
+`
+	refs := ExtractCreateTables(src)
+	if len(refs) != 7 {
+		t.Fatalf("expected 7 refs, got %d: %+v", len(refs), refs)
+	}
+	gotSchemas := map[string]string{}
+	for _, r := range refs {
+		gotSchemas[r.Table] = r.Schema
+	}
+	if gotSchemas["tokens"] != "auth" {
+		t.Errorf("auth.tokens schema = %q", gotSchemas["tokens"])
+	}
+	if gotSchemas["quoted_name"] != "" {
+		t.Errorf("quoted-name should have no schema, got %q", gotSchemas["quoted_name"])
+	}
+}
+
+func TestExtractCreateTables_DedupesSameSchemaTable(t *testing.T) {
+	src := `
+CREATE TABLE users (id INT);
+CREATE TABLE users (id INT);
+`
+	refs := ExtractCreateTables(src)
+	if len(refs) != 1 {
+		t.Errorf("expected 1 deduped ref, got %d", len(refs))
+	}
+}
+
+func TestExtractCreateTables_IgnoresAlterAndDrop(t *testing.T) {
+	src := `
+ALTER TABLE users ADD COLUMN name TEXT;
+DROP TABLE sessions;
+`
+	if got := ExtractCreateTables(src); len(got) != 0 {
+		t.Errorf("alter/drop should not produce CREATE refs, got %+v", got)
+	}
+}
+
+func TestIsMigrationPath(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"db/migrate/001_create_users.sql", true},
+		{"db/migrations/2024_01_init.sql", true},
+		{"migrations/v1.sql", true},
+		{"internal/db/migrations/init.sql", true},
+		{"pkg/queries/select.sql", false},
+		{"main.go", false},
+		{"docs/migration_guide.md", false}, // not .sql
+	}
+	for _, c := range cases {
+		if got := IsMigrationPath(c.path); got != c.want {
+			t.Errorf("IsMigrationPath(%q) = %v, want %v", c.path, got, c.want)
+		}
+	}
+}
+
+func TestMigrationNodeID(t *testing.T) {
+	if got := MigrationNodeID("db/migrate/001_init.sql"); got != "migration::db/migrate/001_init.sql" {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestTableNodeID(t *testing.T) {
 	cases := []struct {
 		dialect, schema, table, want string

@@ -181,6 +181,88 @@ func splitSchemaTable(name string) (schema, table string) {
 	return "", strings.TrimSpace(name)
 }
 
+// createTableRe matches CREATE TABLE [IF NOT EXISTS] declarations
+// across the four canonical identifier-quoting styles. Used by
+// ExtractCreateTables for migration-file extraction — distinct
+// from ExtractTables, which scans query strings rather than DDL.
+var createTableRe = regexp.MustCompile(`(?i)\bCREATE\s+(?:GLOBAL\s+TEMPORARY\s+|LOCAL\s+TEMPORARY\s+|TEMPORARY\s+|TEMP\s+|UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z_"\x60\[][a-zA-Z0-9_."\x60\]]*)`)
+
+// ExtractCreateTables returns the tables declared by CREATE TABLE
+// statements in a SQL source file. Schema-qualified names retain
+// their schema in TableRef.Schema; identifier quoting is stripped.
+// Op is always "create".
+//
+// Used by migration-file extraction where the SQL source is a DDL
+// script rather than an embedded query string. Drop / alter
+// statements are deliberately not extracted — a migration that
+// drops a table doesn't *provide* the table to the rest of the
+// repo, and modeling alter-as-delta would require maintaining
+// per-migration ordering that's out of scope for the v1.
+func ExtractCreateTables(source string) []TableRef {
+	if source == "" {
+		return nil
+	}
+	matches := createTableRe.FindAllStringSubmatch(source, -1)
+	seen := make(map[string]struct{})
+	var refs []TableRef
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		schema, table := splitSchemaTable(stripQuoting(m[1]))
+		if table == "" {
+			continue
+		}
+		key := schema + "::" + table
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		refs = append(refs, TableRef{
+			Table:  table,
+			Schema: schema,
+			Op:     "create",
+		})
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Schema != refs[j].Schema {
+			return refs[i].Schema < refs[j].Schema
+		}
+		return refs[i].Table < refs[j].Table
+	})
+	return refs
+}
+
+// MigrationNodeID is the canonical synthetic ID for a migration
+// node. The path component lets agents reach the originating file
+// in one step; the prefix matches the synthetic-ID convention
+// used by db:: tables and module:: dependencies.
+func MigrationNodeID(path string) string {
+	return "migration::" + path
+}
+
+// IsMigrationPath returns true when filePath looks like a SQL
+// migration file. Recognised conventions: any .sql file under a
+// directory whose name contains "migrate" or "migration"
+// (case-insensitive). Matches Rails (db/migrate/), golang-migrate
+// (migrations/), Alembic when wrapped (we mostly handle alembic
+// via Python parsers separately), and most ORM generators.
+func IsMigrationPath(filePath string) bool {
+	if !strings.HasSuffix(strings.ToLower(filePath), ".sql") {
+		return false
+	}
+	lower := strings.ToLower(filePath)
+	for _, segment := range []string{"/migrate/", "/migrations/", "/migrate.", "/migrations."} {
+		if strings.Contains(lower, segment) {
+			return true
+		}
+	}
+	return strings.HasPrefix(lower, "migrate/") ||
+		strings.HasPrefix(lower, "migrations/") ||
+		strings.HasPrefix(lower, "db/migrate/") ||
+		strings.HasPrefix(lower, "db/migrations/")
+}
+
 // TableNodeID returns the canonical synthetic ID for a table
 // reference. Mirrors the ecosystem-prefix convention used by
 // module:: / external:: / annotation:: / event:: nodes — `db::`
