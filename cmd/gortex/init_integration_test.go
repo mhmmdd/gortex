@@ -125,3 +125,89 @@ func TestInitAgentsFilterRejectsUnknownName(t *testing.T) {
 		t.Fatalf("expected error to name the typo, got: %v", err)
 	}
 }
+
+// TestInitCreatesProjectMarker pins the fix for issue #14: a fresh
+// repo without `.gortex/` must end up with one after `gortex init` so
+// the MCP server can resolve it as a single-project entry point.
+func TestInitCreatesProjectMarker(t *testing.T) {
+	saved := struct {
+		yes, dryRun, json bool
+		agents            string
+	}{initYes, initDryRun, initJSON, initAgents}
+	t.Cleanup(func() {
+		initYes, initDryRun, initJSON = saved.yes, saved.dryRun, saved.json
+		initAgents = saved.agents
+	})
+
+	repo := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+
+	initYes = true
+	initDryRun = false
+	initJSON = false
+	initAgents = "claude-code"
+
+	var stdout, stderr bytes.Buffer
+	initCmd.SetOut(&stdout)
+	initCmd.SetErr(&stderr)
+	t.Cleanup(func() {
+		initCmd.SetOut(nil)
+		initCmd.SetErr(nil)
+	})
+
+	if err := runInit(initCmd, []string{repo}); err != nil {
+		t.Fatalf("runInit: %v\nstderr: %s", err, stderr.String())
+	}
+
+	marker := filepath.Join(repo, ".gortex")
+	info, err := os.Stat(marker)
+	if err != nil {
+		t.Fatalf("expected %s to exist after init, got: %v", marker, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected %s to be a directory", marker)
+	}
+
+	// Idempotency: a second run must not error out.
+	if err := runInit(initCmd, []string{repo}); err != nil {
+		t.Fatalf("second runInit: %v", err)
+	}
+}
+
+// TestInitDryRunSkipsProjectMarker pins the inverse: dry-run is a
+// planning mode and must not write the marker either, otherwise it
+// would silently bind the directory.
+func TestInitDryRunSkipsProjectMarker(t *testing.T) {
+	saved := struct {
+		yes, dryRun, json bool
+		agents            string
+	}{initYes, initDryRun, initJSON, initAgents}
+	t.Cleanup(func() {
+		initYes, initDryRun, initJSON = saved.yes, saved.dryRun, saved.json
+		initAgents = saved.agents
+	})
+
+	repo := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+
+	initYes = true
+	initDryRun = true
+	initJSON = true
+	initAgents = "claude-code"
+
+	var stdout, stderr bytes.Buffer
+	initCmd.SetOut(&stdout)
+	initCmd.SetErr(&stderr)
+	t.Cleanup(func() {
+		initCmd.SetOut(nil)
+		initCmd.SetErr(nil)
+	})
+
+	if err := runInit(initCmd, []string{repo}); err != nil {
+		t.Fatalf("runInit: %v\nstderr: %s", err, stderr.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(repo, ".gortex")); err == nil {
+		t.Fatal("dry-run wrote .gortex/ — must be planning-only")
+	}
+}

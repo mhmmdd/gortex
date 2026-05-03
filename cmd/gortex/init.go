@@ -34,6 +34,7 @@ import (
 	"github.com/zzet/gortex/internal/parser/languages"
 	"github.com/zzet/gortex/internal/query"
 	genskills "github.com/zzet/gortex/internal/skills"
+	"github.com/zzet/gortex/internal/workspace"
 )
 
 // Per-flag globals. Behaviour flags stay separate from UX flags so
@@ -143,6 +144,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return err
+	}
+
+	// Bind this directory as a single-project entry point so the MCP
+	// server can resolve it without --hooks-only setups, daemon-less
+	// clients, or future runs needing manual setup. The marker is the
+	// `.gortex/` directory itself (see internal/workspace.IndexDir);
+	// nothing else needs to live inside it.
+	if !initDryRun && !initHooksOnly {
+		if err := ensureProjectMarker(absRoot, cmd.ErrOrStderr()); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[gortex init] warning: could not create %s: %v\n", workspace.IndexDir, err)
+		}
 	}
 
 	// --hooks-only short-circuit: install/heal Claude Code hooks
@@ -353,6 +365,28 @@ func countByAction(files []agents.FileAction) string {
 		parts = append(parts, fmt.Sprintf("would-merge=%d", wm))
 	}
 	return strings.Join(parts, " ")
+}
+
+// ensureProjectMarker creates `.gortex/` at the repo root so that
+// `workspace.Resolve` recognises this directory as a single-project
+// entry point. Idempotent: a no-op if the directory already exists.
+// Reports first-time creation to stderr.
+func ensureProjectMarker(root string, w io.Writer) error {
+	dir := filepath.Join(root, workspace.IndexDir)
+	existed := true
+	if _, err := os.Stat(dir); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		existed = false
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if !existed {
+		_, _ = fmt.Fprintf(w, "[gortex init] created %s/ to bind this directory as a Gortex single-project root\n", workspace.IndexDir)
+	}
+	return nil
 }
 
 // ensureGlobalConfig adds this repo to ~/.config/gortex/config.yaml

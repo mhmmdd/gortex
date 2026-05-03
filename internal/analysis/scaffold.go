@@ -12,10 +12,16 @@ import (
 )
 
 // SourceReader provides access to symbol source code for scaffolding.
+// ResolveFilePath maps a graph file path (repo-prefixed in multi-repo mode,
+// repo-relative in single-repo mode) to an absolute filesystem path. It
+// returns "" when the path can't be anchored to any indexed repo, which
+// callers must surface as an error rather than silently opening a file
+// relative to the daemon's process CWD.
+//
 // This interface avoids a circular dependency with the indexer package.
 type SourceReader interface {
 	Graph() *graph.Graph
-	RootPath() string
+	ResolveFilePath(graphPath string) string
 }
 
 // ScaffoldEdit describes a single code insertion for scaffolding.
@@ -37,7 +43,6 @@ type ScaffoldResult struct {
 // code from depth-1 callers, and creates a test stub if a test pattern exists.
 func GenerateScaffold(engine *query.Engine, reader SourceReader, exampleID, newName string) (*ScaffoldResult, error) {
 	g := reader.Graph()
-	rootPath := reader.RootPath()
 
 	// Look up the example symbol
 	node := g.GetNode(exampleID)
@@ -49,8 +54,14 @@ func GenerateScaffold(engine *query.Engine, reader SourceReader, exampleID, newN
 		return nil, fmt.Errorf("symbol has no line range: %s", exampleID)
 	}
 
-	// Step 2: Read the example's source code from disk
-	source, err := readSourceLines(rootPath, node.FilePath, node.StartLine, node.EndLine)
+	// Step 2: Read the example's source code from disk. Resolve via the
+	// SourceReader so multi-repo paths anchor to the correct repo root
+	// rather than the daemon process CWD.
+	absPath := reader.ResolveFilePath(node.FilePath)
+	if absPath == "" {
+		return nil, fmt.Errorf("could not resolve abs path for %s", node.FilePath)
+	}
+	source, err := readSourceLines(absPath, node.StartLine, node.EndLine)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read source for %s: %w", exampleID, err)
 	}
@@ -82,7 +93,7 @@ func GenerateScaffold(engine *query.Engine, reader SourceReader, exampleID, newN
 	}
 
 	// Look for test pattern
-	testEdit := generateTestStub(g, rootPath, node, newName)
+	testEdit := generateTestStub(g, reader, node, newName)
 	if testEdit != nil {
 		result.Edits = append(result.Edits, *testEdit)
 	} else {
@@ -92,9 +103,9 @@ func GenerateScaffold(engine *query.Engine, reader SourceReader, exampleID, newN
 	return result, nil
 }
 
-// readSourceLines reads lines [startLine, endLine] (1-indexed) from a file.
-func readSourceLines(rootPath, relPath string, startLine, endLine int) (string, error) {
-	absPath := filepath.Join(rootPath, relPath)
+// readSourceLines reads lines [startLine, endLine] (1-indexed) from an
+// absolute file path.
+func readSourceLines(absPath string, startLine, endLine int) (string, error) {
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", err
@@ -179,11 +190,15 @@ func generateRegistrationCode(g *graph.Graph, callers []*graph.Node, example *gr
 
 // generateTestStub creates a test stub edit by finding the test file and test
 // functions associated with the example symbol.
-func generateTestStub(g *graph.Graph, rootPath string, example *graph.Node, newName string) *ScaffoldEdit {
+func generateTestStub(g *graph.Graph, reader SourceReader, example *graph.Node, newName string) *ScaffoldEdit {
 	testFilePath := deriveTestFilePath(example.FilePath)
 
-	// Check if the test file exists on disk
-	absTestPath := filepath.Join(rootPath, testFilePath)
+	// Check if the test file exists on disk. Resolve abs path through
+	// the reader so multi-repo paths anchor to the correct root.
+	absTestPath := reader.ResolveFilePath(testFilePath)
+	if absTestPath == "" {
+		return nil
+	}
 	if _, err := os.Stat(absTestPath); err != nil {
 		return nil
 	}
@@ -207,7 +222,7 @@ func generateTestStub(g *graph.Graph, rootPath string, example *graph.Node, newN
 	}
 
 	// Read the test function source and substitute the name
-	testSource, err := readSourceLines(rootPath, testFilePath, testExample.StartLine, testExample.EndLine)
+	testSource, err := readSourceLines(absTestPath, testExample.StartLine, testExample.EndLine)
 	if err != nil {
 		return nil
 	}

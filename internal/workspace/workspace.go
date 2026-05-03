@@ -185,8 +185,9 @@ func Resolve(cwd string) (*Bind, error) {
 func NotEntryPointError(cwd string) error {
 	return fmt.Errorf(
 		"%w: %s is neither a workspace root (containing %s) nor a project root (containing %s/). "+
-			"There is no walk-up — start the MCP server from one of these two locations",
-		ErrNotEntryPoint, cwd, MarkerFile, IndexDir,
+			"There is no walk-up. Run `gortex init` here to bind this directory as a single-project root, "+
+			"or create %s to bind it as a workspace root",
+		ErrNotEntryPoint, cwd, MarkerFile, IndexDir, MarkerFile,
 	)
 }
 

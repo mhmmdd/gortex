@@ -1679,20 +1679,24 @@ func (s *Server) handleAnalyzeInteropUsers(_ context.Context, req mcp.CallToolRe
 // any symbol to its file. Re-runnable: each call re-walks tags
 // and overwrites existing meta.
 func (s *Server) handleAnalyzeReleases(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if s.indexer == nil {
-		return mcp.NewToolResultError("releases enrichment requires an active indexer"), nil
+	roots := s.collectRepoRoots(req.GetString("repo", ""))
+	if len(roots) == 0 {
+		return mcp.NewToolResultError("releases enrichment requires at least one indexed repo with a root path"), nil
 	}
-	root := s.indexer.RootPath()
-	if root == "" {
-		return mcp.NewToolResultError("indexer has no root path — was the repo indexed?"), nil
-	}
-	count, err := releases.EnrichGraph(s.graph, root)
-	if err != nil {
-		return mcp.NewToolResultError("releases enrichment failed: " + err.Error()), nil
+	total := 0
+	perRepo := make(map[string]any, len(roots))
+	for prefix, root := range roots {
+		count, err := releases.EnrichGraph(s.graph, root)
+		if err != nil {
+			perRepo[prefix] = map[string]any{"root": root, "error": err.Error()}
+			continue
+		}
+		total += count
+		perRepo[prefix] = map[string]any{"root": root, "enriched": count}
 	}
 	return mcp.NewToolResultJSON(map[string]any{
-		"enriched": count,
-		"root":     root,
+		"enriched": total,
+		"per_repo": perRepo,
 	})
 }
 
@@ -1706,22 +1710,56 @@ func (s *Server) handleAnalyzeReleases(_ context.Context, req mcp.CallToolReques
 // agent invoked it). Repeat invocations re-run blame and overwrite
 // existing meta.last_authored, which is the desired behaviour for
 // post-commit refresh.
-func (s *Server) handleAnalyzeBlame(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if s.indexer == nil {
-		return mcp.NewToolResultError("blame enrichment requires an active indexer"), nil
+func (s *Server) handleAnalyzeBlame(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	roots := s.collectRepoRoots(req.GetString("repo", ""))
+	if len(roots) == 0 {
+		return mcp.NewToolResultError("blame enrichment requires at least one indexed repo with a root path"), nil
 	}
-	root := s.indexer.RootPath()
-	if root == "" {
-		return mcp.NewToolResultError("indexer has no root path — was the repo indexed?"), nil
-	}
-	count, err := blame.EnrichGraph(s.graph, root)
-	if err != nil {
-		return mcp.NewToolResultError("blame enrichment failed: " + err.Error()), nil
+	total := 0
+	perRepo := make(map[string]any, len(roots))
+	for prefix, root := range roots {
+		count, err := blame.EnrichGraph(s.graph, root)
+		if err != nil {
+			perRepo[prefix] = map[string]any{"root": root, "error": err.Error()}
+			continue
+		}
+		total += count
+		perRepo[prefix] = map[string]any{"root": root, "enriched": count}
 	}
 	return mcp.NewToolResultJSON(map[string]any{
-		"enriched": count,
-		"root":     root,
+		"enriched": total,
+		"per_repo": perRepo,
 	})
+}
+
+// collectRepoRoots returns the set of repo prefix → root paths to enrich.
+// In multi-repo mode iterates every tracked repo (or just the one matching
+// `scope` when set). In single-repo mode returns the lone indexer's root
+// keyed by an empty prefix. Empty roots are skipped so callers don't have
+// to filter them downstream.
+func (s *Server) collectRepoRoots(scope string) map[string]string {
+	out := make(map[string]string)
+	if s.multiIndexer != nil {
+		if scope != "" {
+			if root, ok := s.multiIndexer.RepoRoot(scope); ok {
+				out[scope] = root
+			}
+			return out
+		}
+		for prefix, meta := range s.multiIndexer.AllMetadata() {
+			if meta == nil || meta.RootPath == "" {
+				continue
+			}
+			out[prefix] = meta.RootPath
+		}
+		return out
+	}
+	if s.indexer != nil {
+		if root := s.indexer.RootPath(); root != "" {
+			out[s.indexer.RepoPrefix()] = root
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -1745,6 +1783,21 @@ func (s *Server) handleFindDeadCode(_ context.Context, req mcp.CallToolRequest) 
 	}
 
 	entries := analysis.FindDeadCode(s.graph, s.getProcesses(), nil, opts)
+
+	// Cap response size — large repos surface thousands of dead-code
+	// candidates and the default JSON encoding spills past the MCP
+	// per-response token cap. Callers that need the full list can
+	// raise the limit explicitly.
+	limit := 200
+	if v, ok := args["limit"].(float64); ok && v > 0 {
+		limit = int(v)
+	}
+	totalEntries := len(entries)
+	deadTruncated := false
+	if len(entries) > limit {
+		entries = entries[:limit]
+		deadTruncated = true
+	}
 
 	variablesNote := ""
 	if !opts.IncludeVariables {
@@ -1781,7 +1834,11 @@ func (s *Server) handleFindDeadCode(_ context.Context, req mcp.CallToolRequest) 
 
 	result := map[string]any{
 		"dead_code": entries,
-		"total":     len(entries),
+		"total":     totalEntries,
+		"truncated": deadTruncated,
+	}
+	if deadTruncated {
+		result["limit"] = limit
 	}
 	if variablesNote != "" {
 		result["note"] = variablesNote
@@ -1850,6 +1907,21 @@ func (s *Server) handleFindHotspots(_ context.Context, req mcp.CallToolRequest) 
 // 10.6 handleScaffold
 // ---------------------------------------------------------------------------
 
+// scaffoldReader bridges Server to analysis.SourceReader so scaffolding can
+// resolve file paths through the multi-repo aware Server.resolveGraphPath
+// instead of relying on a single Indexer.RootPath which is empty in
+// multi-repo mode.
+type scaffoldReader struct{ s *Server }
+
+func (r scaffoldReader) Graph() *graph.Graph { return r.s.graph }
+func (r scaffoldReader) ResolveFilePath(graphPath string) string {
+	abs, err := r.s.resolveGraphPath(graphPath)
+	if err != nil {
+		return ""
+	}
+	return abs
+}
+
 func (s *Server) handleScaffold(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	exampleID, err := req.RequireString("id")
 	if err != nil {
@@ -1866,7 +1938,7 @@ func (s *Server) handleScaffold(_ context.Context, req mcp.CallToolRequest) (*mc
 		dryRun = v
 	}
 
-	result, err := analysis.GenerateScaffold(s.engine, s.indexer, exampleID, newName)
+	result, err := analysis.GenerateScaffold(s.engine, scaffoldReader{s}, exampleID, newName)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -2749,6 +2821,21 @@ func (s *Server) handleGetContracts(_ context.Context, req mcp.CallToolRequest) 
 		otherReposTotal += n
 	}
 
+	// Cap response — every per-contract row carries handler trails and
+	// schema metadata, so a few hundred contracts blows past the MCP
+	// per-response token cap. Default 200 surfaces enough to be useful;
+	// callers that need every contract pass `limit` explicitly.
+	contractsLimit := 200
+	if v, ok := args["limit"].(float64); ok && v > 0 {
+		contractsLimit = int(v)
+	}
+	contractsTotal := len(filtered)
+	contractsTruncated := false
+	if len(filtered) > contractsLimit {
+		filtered = filtered[:contractsLimit]
+		contractsTruncated = true
+	}
+
 	if isCompact(req) {
 		var b strings.Builder
 		// Group by repo for readability in multi-repo mode.
@@ -2812,8 +2899,12 @@ func (s *Server) handleGetContracts(_ context.Context, req mcp.CallToolRequest) 
 	}
 
 	payload := map[string]any{
-		"by_repo": byRepo,
-		"total":   len(filtered),
+		"by_repo":   byRepo,
+		"total":     contractsTotal,
+		"truncated": contractsTruncated,
+	}
+	if contractsTruncated {
+		payload["limit"] = contractsLimit
 	}
 	if otherReposTotal > 0 {
 		payload["other_repos"] = map[string]any{

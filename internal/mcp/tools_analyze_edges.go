@@ -763,6 +763,20 @@ func (s *Server) handleAnalyzeErrorSurface(_ context.Context, req mcp.CallToolRe
 		return rows[i].Symbol < rows[j].Symbol
 	})
 
+	// Cap response size — large repos blow past the MCP token cap on
+	// the JSON shape. Default 200 keeps the response useful while
+	// callers that need everything pass an explicit limit.
+	limit := 200
+	if v, ok := req.GetArguments()["limit"].(float64); ok && v > 0 {
+		limit = int(v)
+	}
+	totalRows := len(rows)
+	rowsTruncated := false
+	if len(rows) > limit {
+		rows = rows[:limit]
+		rowsTruncated = true
+	}
+
 	if isGCX(req) {
 		items := make([]errorSurfaceItem, 0, len(rows))
 		for _, r := range rows {
@@ -788,10 +802,15 @@ func (s *Server) handleAnalyzeErrorSurface(_ context.Context, req mcp.CallToolRe
 		}
 		return mcp.NewToolResultText(b.String()), nil
 	}
-	return mcp.NewToolResultJSON(map[string]any{
-		"throwers": rows,
-		"total":    len(rows),
-	})
+	resp := map[string]any{
+		"throwers":  rows,
+		"total":     totalRows,
+		"truncated": rowsTruncated,
+	}
+	if rowsTruncated {
+		resp["limit"] = limit
+	}
+	return mcp.NewToolResultJSON(resp)
 }
 
 // ---------------------------------------------------------------------------

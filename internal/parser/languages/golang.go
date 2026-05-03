@@ -276,7 +276,7 @@ func (e *GoExtractor) Extract(filePath string, src []byte) (*parser.ExtractionRe
 					line:     expr.StartLine + 1,
 				})
 			}
-			if source, op, key, ok := detectGoConfigKey(expr.Node, method, src); ok {
+			if source, op, key, ok := detectGoConfigKey(expr.Node, m.Captures["callm.receiver"].Text, method, src); ok {
 				configEvents = append(configEvents, goConfigEvent{
 					source: source,
 					op:     op,

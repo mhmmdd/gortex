@@ -41,7 +41,24 @@ var goViperReadMethods = map[string]struct{}{
 	"IsSet":                   {},
 }
 
-func goConfigMethod(method string) (source, op string, ok bool) {
+func goConfigMethod(receiver, method string) (source, op string, ok bool) {
+	// stdlib env-var lookups — disambiguated by the `os` package
+	// receiver so domain types with similarly named methods don't
+	// trigger false positives. This is the dominant pattern in
+	// codebases that haven't adopted viper, so without it the
+	// config_readers analyzer reports zero edges and looks broken.
+	if receiver == "os" {
+		switch method {
+		case "Getenv":
+			return "env", "read", true
+		case "LookupEnv":
+			return "env", "read", true
+		case "Setenv":
+			return "env", "write", true
+		case "Unsetenv":
+			return "env", "write", true
+		}
+	}
 	if _, hit := goViperReadMethods[method]; hit {
 		return "viper", "read", true
 	}
@@ -69,11 +86,11 @@ type goConfigEvent struct {
 // the resolved key when a callm.expr capture matches the config-
 // method set and carries a string-literal key. Dynamic keys are
 // skipped, mirroring the flag and observability extractors.
-func detectGoConfigKey(callExpr *sitter.Node, method string, src []byte) (source, op, key string, ok bool) {
+func detectGoConfigKey(callExpr *sitter.Node, receiver, method string, src []byte) (source, op, key string, ok bool) {
 	if callExpr == nil {
 		return "", "", "", false
 	}
-	source, op, ok = goConfigMethod(method)
+	source, op, ok = goConfigMethod(receiver, method)
 	if !ok {
 		return "", "", "", false
 	}

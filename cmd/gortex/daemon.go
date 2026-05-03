@@ -227,6 +227,15 @@ func runDaemonStart(cmd *cobra.Command, _ []string) error {
 		logger.Info("daemon: warmup starting")
 		mw := warmupDaemonState(state, logger)
 		controller.AttachWatcher(mw)
+		// Community detection and process discovery only run when a
+		// repo is tracked or indexed via MCP — a daemon coming up off
+		// a snapshot never triggers them. Fire once here so
+		// get_communities / get_processes / dashboards reflect the
+		// loaded graph instead of returning "run index_repository
+		// first" against a fully populated state.
+		if state.mcpServer != nil {
+			state.mcpServer.RunAnalysis()
+		}
 		elapsed := time.Since(start)
 		controller.MarkReady(elapsed)
 		logger.Info("daemon: ready", zap.Duration("warmup", elapsed))

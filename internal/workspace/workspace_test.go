@@ -180,6 +180,13 @@ func TestResolve_NotEntryPoint(t *testing.T) {
 	if !strings.Contains(msg, "no walk-up") && !strings.Contains(msg, "walk-up") {
 		t.Errorf("error %q should mention no walk-up", msg)
 	}
+	// The error must point users at a concrete remediation: `gortex
+	// init` for the single-project case. Without it the message is
+	// correct but actionable only by readers who already know the
+	// model — see issue #14.
+	if !strings.Contains(msg, "gortex init") {
+		t.Errorf("error %q should suggest `gortex init` for the single-project case", msg)
+	}
 }
 
 func TestResolve_NoWalkUp(t *testing.T) {

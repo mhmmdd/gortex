@@ -212,8 +212,15 @@ func (s *Server) handleGetActiveProject(_ context.Context, _ mcp.CallToolRequest
 	} else {
 		repos, resolveErr := gc.ResolveRepos(project)
 		if resolveErr != nil {
-			result["repos"] = []any{}
-			result["error"] = resolveErr.Error()
+			// Common after the workspace bind drops to "unbound"
+			// while a stale active_project still points at a
+			// project the workspace no longer discovers. Fall back
+			// to the workspace-level repo list and record the drift
+			// in `note` so the caller can offer a fix without the
+			// surface being a hard error.
+			result["project"] = ""
+			result["repos"] = buildRepoList(gc.Repos)
+			result["note"] = fmt.Sprintf("active_project %q not found in current workspace; returning top-level repos", project)
 		} else {
 			result["repos"] = buildRepoList(repos)
 		}

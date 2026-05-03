@@ -108,10 +108,16 @@ func classifyToken(tok string) tokenKind {
 	if !identRe.MatchString(tok) {
 		return tokenOther
 	}
-	// Avoid flagging plain lowercase english words. Require at least one of:
-	// capital letter, underscore, dot, or `()` suffix.
+	// Require a strong signal that this is a code symbol the graph
+	// would carry: an uppercase letter (Go/Java/TS public ident),
+	// the Go-style `::` qualifier, or an explicit `()` call suffix.
+	// Pure-lowercase tokens with only `_` or `.` (e.g. `search_symbols`,
+	// `meta.signature`, `older_than`) are MCP tool names, framework
+	// option keys, and Python-style attribute paths — agent configs
+	// reference them constantly but they are NOT Go symbols, so they
+	// would otherwise dominate stale-ref reports as false positives.
 	hasSignal := strings.HasSuffix(tok, "()") ||
-		strings.ContainsAny(bare, "._") ||
+		strings.Contains(bare, "::") ||
 		hasUppercase(bare)
 	if !hasSignal {
 		return tokenOther

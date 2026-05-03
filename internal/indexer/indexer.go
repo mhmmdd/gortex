@@ -374,6 +374,30 @@ func (idx *Indexer) RunDeferredPasses(ctx context.Context) {
 // RootPath returns the root path used for relative path computation.
 func (idx *Indexer) RootPath() string { return idx.rootPath }
 
+// ResolveFilePath maps a graph file path (repo-relative in single-repo mode)
+// to an absolute filesystem path. Returns "" when no root is set so callers
+// can refuse rather than open against the daemon process CWD. Implements
+// analysis.SourceReader.
+func (idx *Indexer) ResolveFilePath(graphPath string) string {
+	if graphPath == "" {
+		return ""
+	}
+	if filepath.IsAbs(graphPath) {
+		return filepath.Clean(graphPath)
+	}
+	if idx.rootPath == "" {
+		return ""
+	}
+	// In multi-repo mode the lone Indexer is wrapped by MultiIndexer
+	// (which exposes RepoRoot/ResolveFilePath); single-repo callers
+	// hit this path directly.
+	rel := graphPath
+	if idx.repoPrefix != "" {
+		rel = strings.TrimPrefix(rel, idx.repoPrefix+"/")
+	}
+	return filepath.Clean(filepath.Join(idx.rootPath, rel))
+}
+
 // SetRepoPrefix sets the repository prefix for multi-repo mode.
 // When non-empty, all node IDs and file paths are prefixed with "<repoPrefix>/".
 func (idx *Indexer) SetRepoPrefix(prefix string) { idx.repoPrefix = prefix }

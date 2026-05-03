@@ -102,6 +102,32 @@ func (s *Server) resolveNodePath(node *graph.Node) (string, error) {
 	return "", fmt.Errorf("%w: node=%q file=%q", errPathUnresolved, node.ID, node.FilePath)
 }
 
+// resolveGraphPath returns the absolute filesystem path for a repo-prefixed
+// graph path (e.g. "gortex/internal/foo.go"). Mirrors resolveNodePath but
+// works on raw path strings — used for edges, search results, and other
+// references that don't carry a Node pointer. Returns errPathUnresolved
+// rather than letting os.Open resolve against the daemon process CWD.
+func (s *Server) resolveGraphPath(graphPath string) (string, error) {
+	if graphPath == "" {
+		return "", errors.New("empty path")
+	}
+	if filepath.IsAbs(graphPath) {
+		return filepath.Clean(graphPath), nil
+	}
+	if s.multiIndexer != nil {
+		if abs := s.multiIndexer.ResolveFilePath(graphPath); abs != "" {
+			return filepath.Clean(abs), nil
+		}
+		return "", fmt.Errorf("could not resolve repo root for path %q", graphPath)
+	}
+	if s.indexer != nil {
+		if root := s.indexer.RootPath(); root != "" {
+			return filepath.Clean(filepath.Join(root, graphPath)), nil
+		}
+	}
+	return "", fmt.Errorf("%w: path=%q", errPathUnresolved, graphPath)
+}
+
 // repoRelative converts an absolute path to a repo-prefixed or root-relative
 // string if it falls under any indexed repo, otherwise returns the absolute
 // path unchanged.

@@ -350,9 +350,19 @@ func (s *Server) handleFindImportPath(_ context.Context, req mcp.CallToolRequest
 		}
 	}
 
+	// Defensive: if the matched node carries an absolute file path
+	// (older snapshots produced before applyRepoPrefix was hardened
+	// could land abs paths in the graph), fold it back to a
+	// repo-relative form so the response stays consistent with every
+	// other graph tool. Without this, agents see a leaked
+	// `/Users/...` import_path that confuses code generation.
+	importDir := filepath.Dir(best.FilePath)
+	if filepath.IsAbs(importDir) {
+		importDir = s.repoRelative(importDir)
+	}
 	return mcp.NewToolResultJSON(map[string]any{
 		"symbol_id":        best.ID,
-		"import_path":      filepath.Dir(best.FilePath),
+		"import_path":      importDir,
 		"already_imported": alreadyImported,
 	})
 }
@@ -1403,10 +1413,14 @@ func (s *Server) handleRenameSymbol(_ context.Context, req mcp.CallToolRequest) 
 		return mcp.NewToolResultError("new_name is the same as the current name"), nil
 	}
 
-	// Resolve root path for file reading.
-	rootPath := ""
-	if s.indexer != nil {
-		rootPath = s.indexer.RootPath()
+	// Resolve abs paths per node/edge — single rootPath is wrong in
+	// multi-repo mode where each repo has its own root.
+	resolvePath := func(graphPath string) string {
+		abs, err := s.resolveGraphPath(graphPath)
+		if err != nil {
+			return ""
+		}
+		return abs
 	}
 
 	type renameEdit struct {
@@ -1422,7 +1436,7 @@ func (s *Server) handleRenameSymbol(_ context.Context, req mcp.CallToolRequest) 
 	editSeen := make(map[string]bool) // file:line dedup
 
 	// 1. The definition itself.
-	defLine := readSingleLine(rootPath, node.FilePath, node.StartLine)
+	defLine := readSingleLineAt(resolvePath(node.FilePath), node.StartLine)
 	if defLine != "" && strings.Contains(defLine, oldName) {
 		key := fmt.Sprintf("%s:%d", node.FilePath, node.StartLine)
 		if !editSeen[key] {
@@ -1445,7 +1459,7 @@ func (s *Server) handleRenameSymbol(_ context.Context, req mcp.CallToolRequest) 
 			continue
 		}
 		// Read the source line at the reference.
-		srcLine := readSingleLine(rootPath, edge.FilePath, edge.Line)
+		srcLine := readSingleLineAt(resolvePath(edge.FilePath), edge.Line)
 		if srcLine == "" || !strings.Contains(srcLine, oldName) {
 			continue
 		}
@@ -1478,7 +1492,7 @@ func (s *Server) handleRenameSymbol(_ context.Context, req mcp.CallToolRequest) 
 			// Check if the member's ID contains the old type name (e.g. "file.go::TypeName.MethodName").
 			if strings.Contains(memberNode.ID, oldName+".") {
 				// The receiver line may mention the type name.
-				srcLine := readSingleLine(rootPath, memberNode.FilePath, memberNode.StartLine)
+				srcLine := readSingleLineAt(resolvePath(memberNode.FilePath), memberNode.StartLine)
 				if srcLine != "" && strings.Contains(srcLine, oldName) {
 					key := fmt.Sprintf("%s:%d", memberNode.FilePath, memberNode.StartLine)
 					if !editSeen[key] {
@@ -1506,7 +1520,7 @@ func (s *Server) handleRenameSymbol(_ context.Context, req mcp.CallToolRequest) 
 		// like "TestValidateToken" that contain the old name.
 		for _, n := range usages.Nodes {
 			if n.FilePath == edge.FilePath && strings.Contains(n.Name, oldName) {
-				srcLine := readSingleLine(rootPath, n.FilePath, n.StartLine)
+				srcLine := readSingleLineAt(resolvePath(n.FilePath), n.StartLine)
 				if srcLine == "" {
 					continue
 				}
@@ -1683,11 +1697,14 @@ func (s *Server) handleEditSymbol(ctx context.Context, req mcp.CallToolRequest) 
 	})
 }
 
-// readSingleLine reads a single line from a file. Returns "" on error.
-func readSingleLine(rootPath, filePath string, lineNum int) string {
-	absPath := filePath
-	if rootPath != "" {
-		absPath = filepath.Join(rootPath, filePath)
+// readSingleLineAt reads a single line from an absolute filesystem path.
+// Returns "" on error. Caller is responsible for resolving relative graph
+// paths to abs first (via Server.resolveGraphPath / resolveNodePath) so a
+// missing repo root surfaces as an error instead of silently opening the
+// wrong file relative to the daemon process CWD.
+func readSingleLineAt(absPath string, lineNum int) string {
+	if absPath == "" {
+		return ""
 	}
 	f, err := os.Open(absPath)
 	if err != nil {
