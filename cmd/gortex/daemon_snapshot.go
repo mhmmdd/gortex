@@ -16,6 +16,20 @@ import (
 	"github.com/zzet/gortex/internal/graph"
 )
 
+func init() {
+	// gob requires every concrete type that lands inside a map[string]any
+	// (Node.Meta / Edge.Meta) to be registered before the first Encode.
+	// The persistence package registers the same set, but the daemon
+	// snapshot path is a separate gob stream — registering here keeps the
+	// coupling explicit so a stripped-down build (or a new caller that
+	// drops the persistence import) cannot silently regress.
+	gob.Register(map[string]any{})
+	gob.Register([]any{})
+	gob.Register([]string{})
+	gob.Register([]int{})
+	gob.Register([]map[string]string{})
+}
+
 // snapshotRepo carries the per-repo metadata needed to reconcile a
 // restarting daemon with the filesystem: specifically, FileMtimes so
 // IncrementalReindex can skip unchanged files and evict deleted ones.

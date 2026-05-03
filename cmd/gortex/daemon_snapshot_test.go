@@ -157,6 +157,59 @@ func TestSnapshotRoundTrip_NodeMetaWithShape(t *testing.T) {
 	assert.Equal(t, "ID", shape.Fields[0].Name)
 }
 
+// TestSnapshotRoundTrip_NodeMetaWithGenericTypes guards the gob
+// registration for the parser-side Meta values that aren't covered by
+// the default map[string]any/[]any/[]string set: type_params (Go/TS/Rust
+// generics, []map[string]string) and status_codes (HTTP contracts, []int).
+// Without the registration, saveSnapshot aborts on the first such node
+// with "type not registered for interface: []map[string]string" and the
+// snapshot file is never written — a silent regression because
+// saveSnapshot only logs.
+func TestSnapshotRoundTrip_NodeMetaWithGenericTypes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.gob.gz")
+	t.Setenv("GORTEX_DAEMON_SNAPSHOT", path)
+
+	orig := graph.New()
+	orig.AddNode(&graph.Node{
+		ID:       "a.go::Generic",
+		Name:     "Generic",
+		Kind:     graph.KindFunction,
+		FilePath: "a.go",
+		Meta: map[string]any{
+			"type_params": []map[string]string{
+				{"name": "T", "bound": "comparable"},
+				{"name": "U"},
+			},
+			"status_codes": []int{200, 404, 500},
+		},
+	})
+
+	saveSnapshot(orig, nil, nil, "v-test", zap.NewNop())
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "snapshot file must exist — encode must not have aborted")
+	require.Greater(t, info.Size(), int64(0), "snapshot must not be empty")
+
+	restored := graph.New()
+	result, err := loadSnapshot(restored, zap.NewNop())
+	require.NoError(t, err)
+	require.True(t, result.Loaded)
+
+	n := restored.GetNode("a.go::Generic")
+	require.NotNil(t, n)
+
+	tp, ok := n.Meta["type_params"].([]map[string]string)
+	require.True(t, ok, "type_params must keep its concrete []map[string]string type, got %T", n.Meta["type_params"])
+	require.Len(t, tp, 2)
+	assert.Equal(t, "T", tp[0]["name"])
+	assert.Equal(t, "comparable", tp[0]["bound"])
+
+	sc, ok := n.Meta["status_codes"].([]int)
+	require.True(t, ok, "status_codes must keep its concrete []int type, got %T", n.Meta["status_codes"])
+	assert.Equal(t, []int{200, 404, 500}, sc)
+}
+
 func TestLoadSnapshot_MissingFile_NotAnError(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GORTEX_DAEMON_SNAPSHOT", filepath.Join(dir, "nope.gob.gz"))
