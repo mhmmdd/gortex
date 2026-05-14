@@ -35,9 +35,10 @@ For Homebrew, package managers (`.deb` / `.rpm` / `.apk`), direct binary downloa
 ## Features
 
 - **Knowledge graph** — every file, symbol, import, call chain, and type relationship in one queryable structure
-- **Multi-repo workspaces** — index multiple repositories into a single graph with cross-repo symbol resolution, project grouping, reference tags, and per-repo scoping
+- **Multi-repo workspaces** — index multiple repositories into a single graph with cross-repo symbol resolution, project grouping, reference tags, and per-repo scoping. A dedicated cross-repo edge layer materialises `cross_repo_calls` / `cross_repo_implements` / `cross_repo_extends` edges whenever a relation's endpoints live in different repos — surfaced via `analyze` `kind: "cross_repo"`. Resolution is evidence-gated: cross-repo links are only drawn when the symbol evidence clears a confidence bar, so unrelated same-named symbols don't get wired together
+- **Per-session workspace isolation** — under the daemon, each MCP session's queries are scoped to the workspace it connected from; sessions on different repos never see each other's graph slices even though they share one process
 - **256 languages** across three tiers — bespoke tree-sitter extractors (~30) for the deep-resolution tier (Go, TypeScript, Python, Rust, Java, C#, Kotlin, Swift, C, C++, Ruby, Elixir, OCaml, …), regex extractors (~60) for niche/legacy (ABAP, COBOL, Verse, AL, AutoHotkey, …), and forest-backed signature-only (~165 via `alexaandru/go-sitter-forest`) for the long tail (Vue, Svelte, Astro, GraphQL, Prisma, Latex, Typst, Agda, Idris, Hack, Haxe, MLIR, LLVM, SystemVerilog, Cedar, CEL, TLA+, Robot, Hurl, …). See [docs/languages.md](docs/languages.md) for the full table
-- **62 MCP tools** — symbol lookup, call chains, blast radius, community/process discovery, contract detection, unified `analyze` (dead code, hotspots, cycles, channel-ops, goroutine-spawns, field-writers, config-readers, event-emitters, error-surface, external-calls, routes, models, components, k8s_resources, images, kustomize), structural code search (`search_ast` with bundled detectors), CPG-lite dataflow (`flow_between` / `taint_paths` over value-flow / arg-of / returns-to edges), diagnostics push (`subscribe_diagnostics` / `get_diagnostics`) + code actions (`get_code_actions` / `apply_code_action` / `fix_all_in_file`) wired across every running language server, scaffolding, inline editing, symbol renaming, read-free file writes (`edit_file` / `write_file`) with path-traversal guard + `dry_run`, multi-axis structured retrieval (`winnow_symbols`), multi-repo management, agent feedback loop, context export, graph-validated config hygiene (`audit_agent_config`), opening-move routing (`plan_turn`), narrative repo overview (`get_repo_outline`), test-coverage gaps (`get_untested_symbols`)
+- **64 MCP tools** — symbol lookup, call chains, blast radius, community/process discovery, contract detection, unified `analyze` (dead code, hotspots, cycles, channel-ops, goroutine-spawns, field-writers, config-readers, event-emitters, error-surface, external-calls, routes, models, components, k8s_resources, images, kustomize, cross-repo), near-duplicate clone detection (`find_clones`), structural code search (`search_ast` with bundled detectors), CPG-lite dataflow (`flow_between` / `taint_paths` over value-flow / arg-of / returns-to edges), diagnostics push (`subscribe_diagnostics` / `unsubscribe_diagnostics` / `get_diagnostics`) + code actions (`get_code_actions` / `apply_code_action` / `fix_all_in_file`) wired across every running language server, scaffolding, inline editing, symbol renaming, read-free file writes (`edit_file` / `write_file`) with path-traversal guard + `dry_run`, multi-axis structured retrieval (`winnow_symbols`), multi-repo management, agent feedback loop, context export, graph-validated config hygiene (`audit_agent_config`), opening-move routing (`plan_turn`), narrative repo overview (`get_repo_outline`), test-coverage gaps (`get_untested_symbols`), and an optional in-process LLM research agent (`ask`)
 - **Semantic search** — hybrid BM25 + vector search with RRF fusion. Hugot (pure-Go ONNX runtime with MiniLM-L6-v2) is bundled by default and auto-downloads the model on first use — zero-config, no native dependencies. GloVe word vectors remain as fallback. Optional build tags switch to ONNX or GoMLX for higher throughput
 - **LSP-enriched call-graph tiers** — every edge carries an `origin` tier (`lsp_resolved` / `lsp_dispatch` / `ast_resolved` / `ast_inferred` / `text_matched`); pass `min_tier` to `get_callers`, `find_usages`, `find_implementations`, etc. to restrict results to compiler-verified edges for high-stakes refactors
 - **MCP progress notifications** — long-running indexing and track_repository calls emit `notifications/progress` with stage messages (walking files → parsing → resolving → semantic enrichment → search index → contracts → done) so hosts show real progress bars on large repos
@@ -52,10 +53,13 @@ For Homebrew, package managers (`.deb` / `.rpm` / `.apk`), direct binary downloa
 - **GCX1 compact wire format** — published, round-trippable text format for MCP tool responses. Opt-in per call via `format: "gcx"` on every list-shaped tool (~17). Auto-served as the default for known clients (Claude Code, Cursor, VS Code, Zed, Aider, Kilo Code, OpenCode, OpenClaw, Codex) when no `format` is passed; explicit `format` always wins. **Median −27.4% tiktoken savings** vs JSON across a 20-case benchmark (best case −38.3%), 100% round-trip integrity. Spec: [`docs/wire-format.md`](docs/wire-format.md). Standalone MIT-licensed reference implementations: Go ([`github.com/gortexhq/gcx-go`](https://github.com/gortexhq/gcx-go)) and TypeScript ([`github.com/gortexhq/gcx-ts`](https://github.com/gortexhq/gcx-ts), npm [`@gortex/wire`](https://www.npmjs.com/package/@gortex/wire)). Reproducible harness: [`bench/wire-format/`](bench/wire-format/)
 - **TOON fallback wire format** — second-tier compact text (~10–15% smaller than JSON, lossy but human-friendly) on every list-shaped tool for clients that don't yet speak GCX. Pass `format: "toon"`
 - **Budget-by-default MCP responses** — list-shaped tools cap each page at the project default budget and return `next_cursor` for the tail. Pagination, sparse fieldsets, and graceful degradation built in
-- **17 MCP resources** — bootstrap state (`gortex://stats`, `gortex://workspace`, `gortex://repos`, `gortex://active-project`, `gortex://schema`, `gortex://session`, `gortex://index-health`), community / process rollups (`gortex://communities`, `gortex://community/{id}`, `gortex://processes`, `gortex://process/{id}`), and analyzer-backed summaries (`gortex://report`, `gortex://god-nodes`, `gortex://surprises`, `gortex://audit`, `gortex://questions`). Read-only, URI-addressable, push `notifications/resources/updated` after each graph re-warm — no polling
+- **16 MCP resources** — bootstrap state (`gortex://stats`, `gortex://workspace`, `gortex://repos`, `gortex://active-project`, `gortex://schema`, `gortex://session`, `gortex://index-health`), community / process rollups (`gortex://communities`, `gortex://community/{id}`, `gortex://processes`, `gortex://process/{id}`), and analyzer-backed summaries (`gortex://report`, `gortex://god-nodes`, `gortex://surprises`, `gortex://audit`, `gortex://questions`). Read-only, URI-addressable, push `notifications/resources/updated` after each graph re-warm — no polling
 - **Framework graph layer** — handler→route edges from HTTP / gRPC / GraphQL / WebSocket / Phoenix / Kafka topic registrations; ORM model→table edges across GORM, SQLAlchemy, Django, ActiveRecord, JPA, TypeORM, Ecto; component-tree edges for JSX/TSX and Phoenix HEEx. Surfaced via `analyze` `kind: "routes" / "models" / "components"`
 - **Infrastructure graph layer** — first-class `KindResource` (Kubernetes Deployments, Services, Ingresses, ConfigMaps, Secrets, CronJobs), `KindKustomization` (overlay tree), and `KindImage` (Dockerfile FROM targets and K8s `container.image`) with `depends_on` / `configures` / `mounts` / `exposes` / `uses_env` edges. Cross-references with code-side `os.Getenv` calls automatically. Surfaced via `analyze` `kind: "k8s_resources" / "kustomize" / "images"`
 - **CPG-lite dataflow** — `value_flow` (intra-procedural assignment / return / range), `arg_of` (caller arg → callee param), and `returns_to` (callee → assignment LHS) edges built at index time. `flow_between` returns ranked dataflow paths between two symbol IDs; `taint_paths` does pattern-driven source→sink sweeps for security audits
+- **Near-duplicate clone detection** — every substantial function body is reduced to a 64-slot token-normalised MinHash signature at index time, LSH banding finds candidate pairs, and a Jaccard threshold filter keeps the true clones — emitted as symmetric `similar_to` edges. `find_clones` surfaces the clusters; `find_clones {dead_only: true}` yields the Gortex-unique "dead duplicates of live code" diagnostic. Gated behind the `clones` coverage domain (default on, threshold tunable in `.gortex.yaml`)
+- **Stratified test classification** — test symbols are classified by role (unit / integration / e2e / benchmark / fixture) and the `tests` edges carry that role, so `winnow_symbols` can filter "production functions only, no tests" and coverage analyzers can reason per-tier
+- **Local LLM research agent (optional)** — built with `-tags llama` and a configured `llm.model`, the `ask` MCP tool runs a small GGUF model in-process via llama.cpp that navigates the graph with gortex tools and returns a synthesized answer — one call replaces a long chain of `search_symbols` / `get_callers` / `contracts` calls. `chain: true` traces a request across repos (consumer → contract → provider → downstream). Falls through to direct tools when the build tag or model is absent
 - **3 MCP prompts** — `pre_commit`, `orientation`, `safe_to_change` for guided workflows
 - **Two-tier config** — global config (`~/.config/gortex/config.yaml`) for projects and repo lists, per-repo `.gortex.yaml` for guards, excludes, and local overrides
 - **Guard rules** — project-specific constraints (co-change, boundary) enforced via `check_guards`
@@ -318,7 +322,7 @@ gortex query stats                      Show graph statistics
 
 All query commands support `--format text|json|dot` (DOT output for Graphviz visualization).
 
-## MCP Tools (50)
+## MCP Tools (64)
 
 ### Core Navigation
 | Tool | Description |
@@ -341,7 +345,30 @@ All query commands support `--format text|json|dot` (DOT output for Graphviz vis
 | `get_callers` | Reverse call graph |
 | `find_usages` | Every reference to a symbol |
 | `find_implementations` | Types implementing an interface |
+| `find_overrides` | Methods that override (children) or are overridden by (parents) a method — backed by `EdgeOverrides` |
 | `get_cluster` | Bidirectional neighborhood |
+
+### Dataflow (CPG-lite)
+| Tool | Description |
+|------|-------------|
+| `flow_between` | Ranked dataflow paths between two symbols — walks `value_flow` / `arg_of` / `returns_to` edges |
+| `taint_paths` | Pattern-driven source→sink dataflow sweep for security and architecture audits |
+
+### Structural Search
+| Tool | Description |
+|------|-------------|
+| `search_ast` | Cross-language structural search by AST shape — raw tree-sitter S-expression `pattern` or a bundled `detector` (e.g. `sql-string-concat`, `weak-crypto`, `hardcoded-secret`) |
+
+### Diagnostics & Code Actions
+Wired across every running language server (gopls, tsserver, pyright, rust-analyzer, …).
+| Tool | Description |
+|------|-------------|
+| `subscribe_diagnostics` | Opt the session into push `notifications/diagnostics`; initial state replays immediately, deltas thereafter. Filter by `min_severity` / `path_prefix` |
+| `unsubscribe_diagnostics` | Opt back out — idempotent, fires automatically on session disconnect |
+| `get_diagnostics` | Latest stored diagnostics for a file; `wait: true` blocks on the first publish |
+| `get_code_actions` | LSP code actions (quickfix / organizeImports / refactor / source) at a file location |
+| `apply_code_action` | Apply a single code action to disk — atomic temp+rename |
+| `fix_all_in_file` | Loop codeAction → apply → re-collect until convergence over the whole file |
 
 ### Coding Workflow
 | Tool | Description |
@@ -366,6 +393,7 @@ All query commands support `--format text|json|dot` (DOT output for Graphviz vis
 | `suggest_pattern` | Extracts code pattern from an example — source, registration, tests |
 | `export_context` | Portable markdown/JSON context briefing for sharing outside MCP |
 | `feedback` | `action: "record"`: report useful/missing symbols. `action: "query"`: aggregated stats — most useful, most missed, accuracy metrics |
+| `ask` | Optional in-process LLM research agent (`-tags llama` + `llm.model`) — navigates the graph and returns a synthesized answer; `chain: true` for cross-repo call-chain tracing |
 
 ### Analysis
 | Tool | Description |
@@ -386,7 +414,8 @@ All query commands support `--format text|json|dot` (DOT output for Graphviz vis
 ### Code Quality
 | Tool | Description |
 |------|-------------|
-| `analyze` | Unified graph analysis. `kind: "dead_code"`: symbols with zero incoming edges. `kind: "hotspots"`: high fan-in/out symbols. `kind: "cycles"`: Tarjan's SCC cycle detection. `kind: "would_create_cycle"`: check if a new dependency would form a cycle |
+| `analyze` | Unified graph analysis dispatcher. `kind` ∈ `dead_code`, `hotspots`, `cycles`, `would_create_cycle`, `todos`, `blame`, `coverage`, `coverage_gaps`, `coverage_summary`, `stale_code`, `stale_flags`, `ownership`, `releases`, `cgo_users`, `wasm_users`, `orphan_tables`, `unreferenced_tables`, `channel_ops`, `goroutine_spawns`, `field_writers`, `annotation_users`, `config_readers`, `event_emitters`, `error_surface`, `external_calls`, `routes`, `models`, `components`, `k8s_resources`, `images`, `kustomize`, `cross_repo` |
+| `find_clones` | Near-duplicate function/method clusters from the MinHash + LSH `similar_to` layer; `dead_only: true` finds dead duplicates of live code |
 | `index_health` | Health score, parse failures, stale files, language coverage |
 | `get_symbol_history` | Symbols modified this session with counts; flags churning (3+ edits) |
 
@@ -405,18 +434,31 @@ All query commands support `--format text|json|dot` (DOT output for Graphviz vis
 | `untrack_repository` | Remove a repo — evicts nodes/edges, persists to global config |
 | `set_active_project` | Switch active project scope for all subsequent queries |
 | `get_active_project` | Return current project name and its member repositories |
+| `list_repos` | List every project/repo in the active workspace |
+| `workspace_info` | Workspace identity — bind mode, root directory, marker contents, discovered member set |
 
-## MCP Resources (7)
+## MCP Resources (16)
+
+Read-only, URI-addressable, no args. Clients that speak resources can `resources/subscribe` once and receive `notifications/resources/updated` after each graph re-warm — no polling.
 
 | Resource | Description |
 |----------|-------------|
 | `gortex://session` | Current session state and activity |
 | `gortex://stats` | Graph statistics (node/edge counts) |
 | `gortex://schema` | Graph schema reference |
+| `gortex://index-health` | Health score, parse failures, stale files |
+| `gortex://workspace` | Workspace identity and discovered member set |
+| `gortex://repos` | Tracked repo / project list |
+| `gortex://active-project` | Active project name and member repos |
 | `gortex://communities` | Community list with cohesion scores |
 | `gortex://community/{id}` | Single community detail |
 | `gortex://processes` | Execution flow list |
 | `gortex://process/{id}` | Single process trace |
+| `gortex://report` | High-level orientation — graph size, top languages/kinds, hotspot / dead-code / todo counts |
+| `gortex://god-nodes` | Top 20 hotspots |
+| `gortex://surprises` | Cycles + dead code + cross-community call hubs |
+| `gortex://audit` | `audit_agent_config` with discovery defaults |
+| `gortex://questions` | TODO / FIXME / XXX / HACK / QUESTION rollup grouped by tag and assignee |
 
 ## MCP Prompts (3)
 
@@ -630,7 +672,7 @@ gortex binary
   HTTP /v1/*     ──────────────────> same tools + /v1/graph + /v1/events (SSE)
   Daemon (unix)  ──────────────────> shared graph for every MCP client, session isolation
   MCP Prompts    ──────────────────> (pre_commit, orientation, safe_to_change)
-  MCP Resources  ──────────────────> (session, stats, schema, communities, processes)
+  MCP Resources  ──────────────────> (16 read-only URIs — bootstrap state + analyzer rollups)
                    MultiWatcher <── filesystem events (fsnotify, per-repo)
                    CrossRepoResolver ──> cross-repo edge creation (type-aware)
                    Persistence ──> gob+gzip snapshot (pluggable backend)
@@ -648,9 +690,19 @@ gortex binary
 
 ## Graph Schema
 
-**Node kinds:** `file`, `function`, `method`, `type`, `interface`, `variable`, `import`, `package`
+**Node kinds:**
+- Code structure: `file`, `package`, `function`, `method`, `type`, `interface`, `field`, `variable`, `constant`, `import`, `contract`, `param`, `closure`, `enum_member`, `generic_param`
+- Coverage extensions: `module`, `table`, `column`, `config_key`, `flag`, `event`, `migration`, `fixture`, `todo`, `team`, `license`, `release`
+- Infrastructure: `resource` (K8s manifest), `kustomization` (Kustomize overlay), `image` (Dockerfile FROM / K8s `container.image`)
 
-**Edge kinds:** `calls`, `imports`, `defines`, `implements`, `extends`, `references`, `member_of`, `instantiates`
+**Edge kinds:**
+- Calls / structure: `calls`, `imports`, `defines`, `implements`, `extends`, `overrides`, `references`, `member_of`, `instantiates`, `provides`, `consumes`, `composes`, `aliases`, `typed_as`, `returns`, `captures`, `param_of`
+- Concurrency / mutation: `spawns`, `sends`, `recvs`, `reads`, `writes`, `reads_config`, `writes_config`
+- Dataflow (CPG-lite): `value_flow`, `arg_of`, `returns_to`
+- Metadata: `annotated`, `emits`, `throws`, `queries`, `reads_col`, `writes_col`, `toggles_flag`, `depends_on_module`, `matches`, `generated_by`, `tests`, `covered_by`, `owns`, `authored`, `licensed_as`
+- Framework / infrastructure: `handles_route`, `models_table`, `renders_child`, `configures`, `mounts`, `exposes`, `depends_on`, `uses_env`
+- Similarity: `similar_to` (MinHash + LSH near-duplicate clones; `Meta["similarity"]` carries the estimated Jaccard score)
+- Cross-repo: `cross_repo_calls` / `cross_repo_implements` / `cross_repo_extends` — materialised whenever a `calls` / `implements` / `extends` edge's endpoints live in different repos
 
 **Multi-repo fields:** Nodes carry `repo_prefix` (empty in single-repo mode). Edges carry `cross_repo` (true when connecting nodes in different repos). Node IDs use `<repo_prefix>/<path>::<Symbol>` format in multi-repo mode.
 
@@ -669,7 +721,7 @@ make fmt            # gofmt -s
 make install        # go install with version ldflags
 ```
 
-Requires Go 1.21+ and CGO enabled (for tree-sitter C bindings).
+Requires Go 1.26+ and CGO enabled (for tree-sitter C bindings).
 
 ## License
 
