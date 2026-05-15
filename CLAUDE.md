@@ -229,6 +229,26 @@ The `find_clones` MCP tool surfaces near-duplicate ("clone") function/method clu
 | Scoping a query to a project          | Pass `project` param to any query tool |
 | Filtering by reference tag            | Pass `ref` param to any query tool |
 
+### Live Editor Buffers (Overlay Sessions)
+
+Editor extensions push in-flight buffers — files the user has edited but not yet saved — into the daemon as **overlays**. Once an overlay is attached to a session, every subsequent `tools/call` from that session sees the overlaid view: graph-walking tools (`find_usages`, `get_call_chain`, `get_file_summary`, `analyze`, …) and source-reading tools (`get_symbol_source`, `get_editing_context`, …) all read the editor-buffer version of the file instead of the saved-buffer one.
+
+| Instead of...                         | You MUST use...                          |
+|---------------------------------------|------------------------------------------|
+| Asking the user to save before a query | `overlay_register` then `overlay_push` — pushes one editor buffer; subsequent tool calls see the overlay merged on top of the on-disk graph view |
+| Pushing keystroke-by-keystroke through HTTP | `overlay_push` over the same MCP transport you're already on — no extra socket, no extra auth |
+| Listing what an extension has staged   | `overlay_list` — every path / size / deleted flag / base SHA for the current session |
+| Cancelling a single overlay           | `overlay_delete` with `path` — saved-buffer view returns for that path on the next tool call |
+| Tearing down an overlay session       | `overlay_drop` — discards every overlay attached to the session, in one call |
+
+**Drift detection.** Pass an editor-captured git blob SHA as `base_sha` on `overlay_push`. When the next tool call needs that path, the daemon compares it to the on-disk hash; if they disagree (a sibling tool, a git operation, or another editor saved over the file) the tool call returns a structured `overlay base SHA mismatch` error so the client knows to re-read the file and resubmit a fresh overlay. Drift is the load-bearing signal that prevents the daemon from folding a stale buffer into queries.
+
+**Deletion overlays.** Push with `deleted: true` to model "this file is going away" — the symbols inside it vanish from the graph for the duration of the session, so the user can preview the impact of a delete without staging it.
+
+**HTTP transport.** `gortex server` exposes the same surface at `POST /v1/overlay/sessions` (optional `session_id` binds an overlay to a known MCP session), `PUT /v1/overlay/sessions/{id}/files`, `DELETE /v1/overlay/sessions/{id}/files`, `GET /v1/overlay/sessions/{id}/files`, `DELETE /v1/overlay/sessions/{id}`. The `/v1/tools/<name>` HTTP entry point reads the active session from `Mcp-Session-Id` (preferred), `X-Gortex-Overlay-Session`, or `?session_id=` (test fallback).
+
+**Sessions auto-expire** after 5 minutes of inactivity, so a crashed extension never leaks unsaved buffers indefinitely.
+
 ### MCP Resources
 
 Bootstrap-state tools are also exposed as MCP resources (read-only, URI-addressable, no args). Clients that speak resources can `resources/subscribe` once and receive `notifications/resources/updated` after each graph re-warm — no polling. The tool form stays for back-compat with clients that don't speak resources.

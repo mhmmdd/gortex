@@ -17,7 +17,7 @@ import (
 )
 
 func (s *Server) registerCodingTools() {
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_editing_context",
 			mcp.WithDescription("The primary tool to call before editing any file. Returns all symbols defined in the file, their signatures, direct dependencies, and immediate callers — everything needed to code without reading raw source lines."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Relative file path")),
@@ -29,7 +29,7 @@ func (s *Server) registerCodingTools() {
 		s.handleGetEditingContext,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("find_import_path",
 			mcp.WithDescription("Given a symbol name you want to use in a file, returns the correct import path. Use instead of reading files or guessing package paths."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Name of the symbol to import")),
@@ -38,7 +38,7 @@ func (s *Server) registerCodingTools() {
 		s.handleFindImportPath,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("explain_change_impact",
 			mcp.WithDescription("Given a list of symbols you plan to modify, returns risk-tiered blast radius: d=1 will break, d=2 likely affected, d=3 needs testing. Includes affected processes and communities."),
 			mcp.WithString("ids", mcp.Required(), mcp.Description("Comma-separated list of symbol IDs to modify")),
@@ -48,7 +48,7 @@ func (s *Server) registerCodingTools() {
 		s.handleEnhancedChangeImpact,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_symbol_source",
 			mcp.WithDescription("Returns the source code of a specific symbol (function, method, type) without reading the entire file. Use instead of Read when you know which symbol you need — saves 70-80% of tokens compared to reading the whole file."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Symbol node ID (e.g. pkg/server.go::HandleRequest)")),
@@ -60,7 +60,7 @@ func (s *Server) registerCodingTools() {
 		s.handleGetSymbolSource,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("batch_symbols",
 			mcp.WithDescription("Returns signatures, source code, callers, and callees for multiple symbols in one call. Use instead of calling get_symbol_source or get_symbol multiple times — saves 60% round-trip overhead."),
 			mcp.WithString("ids", mcp.Required(), mcp.Description("Comma-separated list of symbol IDs")),
@@ -73,7 +73,7 @@ func (s *Server) registerCodingTools() {
 		s.handleBatchSymbols,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_test_targets",
 			mcp.WithDescription("Given changed symbol IDs, traces the call graph to find test files and test functions that exercise those symbols. Use after editing to know exactly which tests to run — no guessing, no running the entire suite."),
 			mcp.WithString("ids", mcp.Required(), mcp.Description("Comma-separated list of changed symbol IDs")),
@@ -82,7 +82,7 @@ func (s *Server) registerCodingTools() {
 		s.handleGetTestTargets,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("suggest_pattern",
 			mcp.WithDescription("Given an existing symbol as an example, extracts the structural pattern for creating similar code. Returns the example source, sibling symbols with the same pattern, registration/wiring code, test patterns, and files to edit. Use when adding a new function/handler/extractor that follows an existing convention."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Symbol ID to use as the pattern example")),
@@ -90,7 +90,7 @@ func (s *Server) registerCodingTools() {
 		s.handleSuggestPattern,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_edit_plan",
 			mcp.WithDescription("Given symbols you plan to change, returns a dependency-ordered list of files and symbols to edit — definitions first, then implementations, then callers, then tests. Eliminates manual dependency reasoning. Use before any multi-file refactor."),
 			mcp.WithString("ids", mcp.Required(), mcp.Description("Comma-separated list of symbol IDs to change")),
@@ -99,7 +99,7 @@ func (s *Server) registerCodingTools() {
 		s.handleGetEditPlan,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("edit_symbol",
 			mcp.WithDescription("Edit a symbol's source code directly by ID — no Read needed. Gortex resolves the file and line range, finds the old_source fragment, replaces it with new_source, and writes the file. Eliminates the Read→Edit roundtrip for ~80% of edits."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Symbol ID (e.g. server.go::NewServer)")),
@@ -109,7 +109,7 @@ func (s *Server) registerCodingTools() {
 		s.handleEditSymbol,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("edit_file",
 			mcp.WithDescription("Edit any file (markdown, config, spec, template, source) by exact string replacement — no Read needed. Accepts absolute paths or paths relative to the indexed repo root. Writes atomically (temp+rename) and re-indexes the file so the graph stays fresh. Pass dry_run=true to validate the replacement without writing. Complements edit_symbol for non-code files that have no symbol ID."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Absolute path, or repo-prefixed / repo-root-relative path")),
@@ -121,7 +121,7 @@ func (s *Server) registerCodingTools() {
 		s.handleEditFile,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("write_file",
 			mcp.WithDescription("Create a new file or overwrite an existing one with the given content — no Read needed. Accepts absolute paths or paths relative to the indexed repo root. Writes atomically (temp+rename) and re-indexes the file so the graph stays fresh. Pass dry_run=true to report what would happen without writing. Use for new docs, configs, specs, scaffolded files; prefer edit_symbol or edit_file when a symbol/string target exists."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Absolute path, or repo-prefixed / repo-root-relative path")),
@@ -131,7 +131,7 @@ func (s *Server) registerCodingTools() {
 		s.handleWriteFile,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("rename_symbol",
 			mcp.WithDescription("Generates coordinated multi-file edit instructions for renaming a symbol. Returns {file, line, old_text, new_text, confidence} for every reference. Use dry_run to preview, then apply edits with the Edit tool."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Symbol ID to rename (e.g. auth/token.go::validateToken)")),
@@ -140,7 +140,7 @@ func (s *Server) registerCodingTools() {
 		s.handleRenameSymbol,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("smart_context",
 			mcp.WithDescription("Assembles the minimal context needed for a task in one call. Searches for relevant symbols, gets their source and relationships, finds patterns to follow, and builds an edit plan. Replaces an entire exploration phase of 5-10 tool calls."),
 			mcp.WithString("task", mcp.Required(), mcp.Description("Natural language description of what you want to do (e.g. 'add a new MCP tool called list_files')")),
@@ -154,7 +154,7 @@ func (s *Server) registerCodingTools() {
 		s.handleSmartContext,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("plan_turn",
 			mcp.WithDescription("Opening-move router. Returns a short ranked list of recommended tool calls (with pre-filled args) for a task — 'what should I call first?'. Use before smart_context when you want a cheaper routing decision; call smart_context directly when you're committed to exploring."),
 			mcp.WithString("task", mcp.Required(), mcp.Description("Natural-language description of the task")),
@@ -163,7 +163,7 @@ func (s *Server) registerCodingTools() {
 		s.handlePlanTurn,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_untested_symbols",
 			mcp.WithDescription("Returns functions and methods in non-test files that no test file reaches via the call graph — the inverse of get_test_targets. Ranked by fan_in descending so the most-used untested symbols surface first. Use to prioritize where to add test coverage."),
 			mcp.WithNumber("limit", mcp.Description("Max entries returned (default: 50)")),
@@ -173,7 +173,7 @@ func (s *Server) registerCodingTools() {
 		s.handleGetUntestedSymbols,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_recent_changes",
 			mcp.WithDescription("Returns files and symbols that changed since the last call (watch mode only). Use to re-orient after the user edits files outside of Claude Code's view, without re-reading anything."),
 			mcp.WithString("since", mcp.Description("ISO 8601 timestamp (omit for all changes since index)")),

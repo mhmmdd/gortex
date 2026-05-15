@@ -323,7 +323,7 @@ gortex query stats                      Show graph statistics
 
 All query commands support `--format text|json|dot` (DOT output for Graphviz visualization).
 
-## MCP Tools (64)
+## MCP Tools (69)
 
 ### Core Navigation
 | Tool | Description |
@@ -438,6 +438,19 @@ Wired across every running language server (gopls, tsserver, pyright, rust-analy
 | `get_active_project` | Return current project name and its member repositories |
 | `list_repos` | List every project/repo in the active workspace |
 | `workspace_info` | Workspace identity — bind mode, root directory, marker contents, discovered member set |
+
+### Live Editor Buffers (Overlay Sessions)
+Editor extensions push in-flight (unsaved) buffers as **overlays**; every subsequent `tools/call` from the same MCP session sees the overlaid view. Graph-walking tools (`find_usages`, `get_call_chain`, `analyze`, …) and source-reading tools (`get_symbol_source`, `get_editing_context`, …) all read the editor-buffer version without per-tool changes. Pass an editor-captured git blob SHA as `base_sha` for drift detection; push with `deleted: true` to preview a deletion. Sessions auto-expire after 5 minutes of inactivity.
+
+| Tool | Description |
+|------|-------------|
+| `overlay_register` | Bind an overlay session to the current MCP session ID (idempotent) |
+| `overlay_push` | Push (or update) a single file overlay |
+| `overlay_list` | List every overlay attached to the session — path / size / deleted / base_sha |
+| `overlay_delete` | Remove one overlay from the session |
+| `overlay_drop` | Tear down the session and discard every overlay |
+
+HTTP transport mirrors the surface at `/v1/overlay/sessions/*`; the `/v1/tools/<name>` entry point reads the overlay session from `Mcp-Session-Id` (preferred), `X-Gortex-Overlay-Session`, or `?session_id=`.
 
 ## MCP Resources (16)
 

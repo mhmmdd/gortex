@@ -364,6 +364,13 @@ func runServer(_ *cobra.Command, _ []string) error {
 	// indefinitely.
 	overlays := daemon.NewOverlayManager(5 * time.Minute)
 	serverHandler.SetOverlayManager(overlays)
+	// Wire the same manager into the MCP server so the `tools/call`
+	// middleware can apply per-session overlays to the in-memory
+	// graph for the duration of each tool call, and so the
+	// overlay_register / overlay_push / overlay_list / overlay_delete
+	// / overlay_drop MCP tools become live for editor extensions
+	// speaking MCP rather than the parallel /v1/overlay/* HTTP API.
+	srv.SetOverlayManager(overlays)
 
 	// Wire the multi-server router. When `~/.gortex/servers.toml` is
 	// present, every

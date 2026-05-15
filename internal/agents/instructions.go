@@ -371,6 +371,19 @@ The ` + "`flow_between`" + ` and ` + "`taint_paths`" + ` MCP tools answer **"whe
 | Scoping a query to a project          | Pass ` + "`project`" + ` param to any query tool |
 | Filtering by reference tag            | Pass ` + "`ref`" + ` param to any query tool |
 
+### Live Editor Buffers (Overlay Sessions)
+
+Editor extensions push in-flight buffers — files the user has edited but not yet saved — as **overlays**. After ` + "`overlay_register`" + ` and one or more ` + "`overlay_push`" + ` calls, every subsequent ` + "`tools/call`" + ` from the same MCP session reads the editor-buffer view (overlay merged on top of the on-disk graph). No per-tool changes are needed: graph-walking tools (` + "`find_usages`" + `, ` + "`get_call_chain`" + `, ` + "`get_file_summary`" + `, ` + "`analyze`" + `, …) and source-reading tools (` + "`get_symbol_source`" + `, ` + "`get_editing_context`" + `, …) all see the overlay.
+
+| Instead of...                         | You MUST use...                          |
+|---------------------------------------|------------------------------------------|
+| Asking the user to save before a query | ` + "`overlay_register`" + ` then ` + "`overlay_push`" + ` — pushes one editor buffer; subsequent tool calls see the overlay |
+| Listing what an extension has staged   | ` + "`overlay_list`" + ` — path / size / deleted / base SHA for the current session |
+| Cancelling a single overlay           | ` + "`overlay_delete`" + ` with ` + "`path`" + ` — saved-buffer view returns for that path |
+| Tearing down an overlay session       | ` + "`overlay_drop`" + ` — discards every overlay attached to the session in one call |
+
+Pass an editor-captured git blob SHA as ` + "`base_sha`" + ` on ` + "`overlay_push`" + ` to enable drift detection: when the next tool call needs that path, the daemon compares ` + "`base_sha`" + ` to the on-disk hash and returns ` + "`overlay base SHA mismatch`" + ` if they disagree, so the client knows to re-read and resubmit. Push with ` + "`deleted: true`" + ` to model a tombstone — the file's symbols vanish from the graph for the session's lifetime. Sessions auto-expire after 5 minutes of inactivity. HTTP transport mirrors the surface at ` + "`/v1/overlay/sessions/*`" + `; the ` + "`/v1/tools/<name>`" + ` entry reads the active session from ` + "`Mcp-Session-Id`" + ` / ` + "`X-Gortex-Overlay-Session`" + ` / ` + "`?session_id=`" + `.
+
 ### MCP Resources
 
 Bootstrap-state tools are also exposed as MCP resources (read-only, URI-addressable, no args). Subscribe via ` + "`resources/subscribe`" + ` once and receive ` + "`notifications/resources/updated`" + ` after each graph re-warm — no polling. Tools stay registered for back-compat with clients that don't speak resources; both surfaces share builder helpers so payloads match byte-for-byte.

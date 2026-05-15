@@ -16,6 +16,7 @@ import (
 	"github.com/zzet/gortex/internal/analysis"
 	"github.com/zzet/gortex/internal/config"
 	"github.com/zzet/gortex/internal/contracts"
+	"github.com/zzet/gortex/internal/daemon"
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/indexer"
 	"github.com/zzet/gortex/internal/llm"
@@ -147,6 +148,25 @@ type Server struct {
 	// Populated by registerToolWithScope as tools are added; consulted
 	// by ResolveToolScope before each handler runs.
 	toolScopes *scopeRegistry
+
+	// overlays is the optional editor-overlay manager. When non-nil,
+	// every `tools/call` is wrapped (via s.addTool) with the
+	// apply/revert middleware in overlay.go so MCP tools see the
+	// caller's editor-buffer content for the duration of the call.
+	// Wired post-construction by SetOverlayManager.
+	overlays *daemon.OverlayManager
+
+	// overlayApplyMu serialises overlay-active tool calls so two
+	// in-flight requests can't race on the same overlay path's
+	// evict/re-add pair. Held for the full apply+handler+revert
+	// window; transparent (untaken) when the caller has no overlay.
+	overlayApplyMu sync.Mutex
+
+	// registerOverlayToolsOnce gates the overlay MCP tool family
+	// (overlay_register / overlay_push / overlay_list /
+	// overlay_delete / overlay_drop) so a second SetOverlayManager
+	// call doesn't double-register them.
+	registerOverlayToolsOnce sync.Once
 }
 
 // sessionFor returns the session-scoped state for the current request.
@@ -1069,6 +1089,22 @@ func (s *Server) ServeStdio() error {
 // This is used by the eval-server to wire tool dispatch into an HTTP handler.
 func (s *Server) MCPServer() *server.MCPServer {
 	return s.mcpServer
+}
+
+// addTool registers a tool whose handler is wrapped with the overlay
+// apply/revert middleware (see overlay.go::wrapToolHandler). Every
+// tool added through this helper picks up overlay-aware behaviour
+// transparently — graph-walking tools see the editor-buffer view,
+// source-reading tools see overlay content. Tools registered the old
+// way (s.mcpServer.AddTool) still work but bypass the middleware.
+//
+// Routing every internal registration through this helper means both
+// the daemon-dispatched path (HandleMessage) and the in-process HTTP
+// path (Handler.CallToolStrict) get identical overlay semantics — the
+// latter bypasses mcp-go's Hooks, so handler-level wrapping is the
+// only place that covers both transports.
+func (s *Server) addTool(tool mcp.Tool, handler server.ToolHandlerFunc) {
+	s.mcpServer.AddTool(tool, s.wrapToolHandler(handler))
 }
 
 // SetContractRegistry sets an explicit contract registry override for the MCP

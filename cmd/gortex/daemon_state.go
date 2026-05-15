@@ -15,6 +15,7 @@ import (
 
 	"github.com/zzet/gortex/internal/config"
 	"github.com/zzet/gortex/internal/contracts"
+	"github.com/zzet/gortex/internal/daemon"
 	"github.com/zzet/gortex/internal/embedding"
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/indexer"
@@ -287,6 +288,16 @@ func buildDaemonState(logger *zap.Logger) (*daemonState, error) {
 	eng.ApplyRerankWeights(cfg.Search.Weights)
 	gortexmcp.Version = version
 	srv := gortexmcp.NewServer(eng, g, idx, nil, logger, cfg.Guards.Rules, multiOpts...)
+
+	// Editor-overlay manager for live-buffer indexing. The MCP
+	// dispatcher binds the inbound MCP session ID to an overlay
+	// session at every `tools/call`; the tool handler middleware
+	// applies the overlay's editor buffers to the in-memory graph
+	// for the duration of the call. 5-minute idle TTL: long enough
+	// for an editor's keystroke→tool-call loop, short enough that a
+	// crashed extension doesn't leak unsaved buffers forever.
+	overlays := daemon.NewOverlayManager(5 * time.Minute)
+	srv.SetOverlayManager(overlays)
 
 	// Semantic manager, feedback, savings — same wiring as runServe.
 	if semMgr := idx.SemanticManager(); semMgr != nil {

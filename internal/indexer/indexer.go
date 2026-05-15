@@ -1541,7 +1541,31 @@ func (idx *Indexer) IndexFileNoResolve(filePath string) error {
 	return idx.indexFile(filePath, false)
 }
 
+// IndexFileFromContent indexes a single file using a caller-supplied
+// in-memory source — the editor-overlay path. Unlike IndexFile, the
+// file at filePath is NEVER read from disk; the bytes in `src` are
+// authoritative. Mtime tracking is also skipped, because an overlay is
+// a transient view: a subsequent IndexFile call restores the on-disk
+// version. Used by the MCP overlay-aware request middleware to merge
+// editor buffers into the graph for the duration of one tool call.
+//
+// The `resolve` parameter mirrors indexFile's: pass true for one-off
+// overlay applies (so cross-file references in the overlaid file
+// resolve immediately), false when a batch caller will run ResolveAll
+// itself.
+func (idx *Indexer) IndexFileFromContent(filePath string, src []byte, resolve bool) error {
+	return idx.indexFileWithSource(filePath, src, resolve, true)
+}
+
 func (idx *Indexer) indexFile(filePath string, resolve bool) error {
+	return idx.indexFileWithSource(filePath, nil, resolve, false)
+}
+
+// indexFileWithSource is the unified parse-and-patch path shared by
+// indexFile (reads from disk) and IndexFileFromContent (caller-supplied
+// bytes). When overlay=true, src is authoritative and mtime tracking is
+// skipped so a subsequent IndexFile call restores the on-disk view.
+func (idx *Indexer) indexFileWithSource(filePath string, src []byte, resolve, overlay bool) error {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		return err
@@ -1563,9 +1587,11 @@ func (idx *Indexer) indexFile(filePath string, resolve bool) error {
 	}
 	idx.graph.EvictFile(graphPath)
 
-	src, err := os.ReadFile(absPath)
-	if err != nil {
-		return err
+	if !overlay {
+		src, err = os.ReadFile(absPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	lang, ok := idx.registry.DetectLanguage(absPath)
@@ -1627,11 +1653,19 @@ func (idx *Indexer) indexFile(filePath string, resolve bool) error {
 		}
 	}
 
-	// Update mtime for this file (uses raw relPath for disk-based tracking).
-	if info, err := os.Stat(absPath); err == nil {
-		idx.mtimeMu.Lock()
-		idx.fileMtimes[filepath.ToSlash(relPath)] = info.ModTime().UnixNano()
-		idx.mtimeMu.Unlock()
+	// Update mtime for this file (uses raw relPath for disk-based
+	// tracking). Skipped for the overlay path: an overlay is a
+	// transient editor-buffer view, so stamping its mtime would make
+	// the next watcher-driven IndexFile call see the on-disk file as
+	// "older than the overlay" and skip the restore. Leaving mtime
+	// unchanged guarantees the disk view comes back the next time a
+	// fsnotify event fires on this path or the overlay revert runs.
+	if !overlay {
+		if info, err := os.Stat(absPath); err == nil {
+			idx.mtimeMu.Lock()
+			idx.fileMtimes[filepath.ToSlash(relPath)] = info.ModTime().UnixNano()
+			idx.mtimeMu.Unlock()
+		}
 	}
 
 	return nil

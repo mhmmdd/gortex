@@ -542,7 +542,7 @@ func compactSubGraph(sg *query.SubGraph) string {
 }
 
 func (s *Server) registerCoreTools() {
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("index_repository",
 			mcp.WithDescription("Index or re-index a local repository path into Gortex. Call once at session start if not already running with --watch."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Absolute path to repository")),
@@ -550,7 +550,7 @@ func (s *Server) registerCoreTools() {
 		s.handleIndexRepository,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_symbol",
 			mcp.WithDescription("Use instead of Read to locate a function, type, interface, or variable definition. Returns location and signature without reading the whole file."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Node ID (e.g. pkg/server.go::HandleRequest)")),
@@ -562,7 +562,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetSymbol,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("search_symbols",
 			mcp.WithDescription("Use instead of Grep to find symbols across the whole codebase. Supports natural language queries with camelCase-aware tokenization and BM25 ranking — 'validate token auth' finds validateToken, AuthMiddleware, parseJWT."),
 			mcp.WithString("query", mcp.Required(), mcp.Description("Search query — can be symbol name, concept, or multiple keywords")),
@@ -583,7 +583,7 @@ func (s *Server) registerCoreTools() {
 		s.handleSearchSymbols,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_file_summary",
 			mcp.WithDescription("Use instead of Read to understand a file's role: returns all its symbols and imports without reading source lines."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Relative file path")),
@@ -598,7 +598,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetFileSummary,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_dependencies",
 			mcp.WithDescription("Returns what a symbol or file depends on — imports, calls, type references — without reading any files. Use before editing to understand incoming contracts."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Node ID")),
@@ -612,7 +612,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetDependencies,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_dependents",
 			mcp.WithDescription("Returns everything that depends on this symbol (blast radius). Call before changing a function or type to know what else must be updated."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Node ID")),
@@ -626,7 +626,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetDependents,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_call_chain",
 			mcp.WithDescription("Traces the call graph forward from a function without reading source. Use to understand what a function ultimately triggers."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Function node ID")),
@@ -643,7 +643,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetCallChain,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_callers",
 			mcp.WithDescription("Returns all callers of a function without reading source. Use instead of Grep when you need to know who calls a function."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Function node ID")),
@@ -658,7 +658,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetCallers,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("find_implementations",
 			mcp.WithDescription("Finds all concrete types that implement an interface. Use before changing an interface to identify all types that will be affected."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Interface node ID")),
@@ -669,7 +669,7 @@ func (s *Server) registerCoreTools() {
 		s.handleFindImplementations,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("find_overrides",
 			mcp.WithDescription("Finds all methods that override the given method (children) or the parent methods it overrides. Backed by EdgeOverrides materialised at index time and promoted to lsp_dispatch when an LSP is available."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Method node ID")),
@@ -681,7 +681,7 @@ func (s *Server) registerCoreTools() {
 		s.handleFindOverrides,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_class_hierarchy",
 			mcp.WithDescription("Returns the inheritance subgraph around a type, interface, or method. Walks EdgeExtends + EdgeImplements + EdgeComposes for type nodes and EdgeOverrides for method nodes — the same graph data find_implementations and find_overrides expose, but as a multi-hop tree so an agent gets the whole chain (parents → root, children → leaves) in one call. Use before refactoring an OO hierarchy or to answer 'what does this class inherit from / who subclasses it'."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Seed node ID — a type, interface, or method")),
@@ -695,7 +695,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetClassHierarchy,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("find_usages",
 			mcp.WithDescription("Use instead of Grep to find every reference to a symbol across the codebase. Returns precise locations with zero false positives."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Node ID")),
@@ -712,7 +712,7 @@ func (s *Server) registerCoreTools() {
 		s.handleFindUsages,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_cluster",
 			mcp.WithDescription("Returns the immediate neighbourhood around a node — all symbols it touches and that touch it. Useful for understanding a module's coupling before refactoring."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Node ID")),
@@ -725,7 +725,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetCluster,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("get_repo_outline",
 			mcp.WithDescription("Narrative single-call overview of the indexed codebase: primary languages, top communities, load-bearing hotspots, most-imported files, and entry points. Use at session start (or when onboarding to an unfamiliar repo) instead of assembling this from graph_stats + analyze + manual inspection. Output stays under ~1k tokens."),
 			mcp.WithString("format", mcp.Description("Output format: json (default), gcx (GCX1 compact wire format), or toon")),
@@ -734,7 +734,7 @@ func (s *Server) registerCoreTools() {
 		s.handleGetRepoOutline,
 	)
 
-	s.mcpServer.AddTool(
+	s.addTool(
 		mcp.NewTool("graph_stats",
 			mcp.WithDescription("Returns a compact summary of the indexed codebase: node/edge counts by kind and language. Call at session start to orient Claude in an unfamiliar repo."),
 			mcp.WithString("format", mcp.Description("Output format: json (default), gcx (GCX1 compact wire format), or toon")),
