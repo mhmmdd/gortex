@@ -146,10 +146,11 @@ func wireContractGolden(name string) string {
 		// and the enrich passes restamp it on next response.
 		return "954c994407f745b921ace19ab999d620f2e1aa071d177722a176f635ae7746dc"
 	case "snapshotHeader":
-		// Bumped when ContractCount was added (additive — gob decodes
-		// unknown fields as zero, so older snapshots still load with
-		// an empty Contracts section).
-		return "d525b1ba64b4ba52c02bf663fba114983213733cf9997e601d57a35fdc2c0dbb"
+		// Bumped when BinaryMtimeUnix was added (additive — gob decodes
+		// unknown fields as zero; older snapshots load with BinaryMtimeUnix=0,
+		// which loadSnapshot treats as "legacy, discard once" to force a
+		// fresh resolve on the next warmup).
+		return "1dfcacfade7ba543c376ded4b86e289757841186a2971a5e6ef083bf6fc01147"
 	case "snapshotRepo":
 		return "8a78544c6e8d6c384f95b971df43408e7bc5f5ab4c7f2052d038bd3ffa4e1311"
 	case "snapshotContract":
