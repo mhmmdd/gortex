@@ -221,10 +221,7 @@ func detectRunnerFromImportEdges(g *graph.Graph, fileNode *graph.Node) string {
 		if e == nil || e.Kind != graph.EdgeImports {
 			continue
 		}
-		path := e.To
-		if strings.HasPrefix(path, prefix) {
-			path = strings.TrimPrefix(path, prefix)
-		}
+		path := strings.TrimPrefix(e.To, prefix)
 		path = strings.Trim(path, "\"'`")
 		switch fileNode.Language {
 		case "javascript", "typescript", "tsx", "jsx":
