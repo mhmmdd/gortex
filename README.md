@@ -399,7 +399,35 @@ gortex query stats                      Show graph statistics
 
 All query commands support `--format text|json|dot` (DOT output for Graphviz visualization).
 
-## MCP Tools (75)
+## MCP Tools (95+, lazy-loaded)
+
+### Tool surface — lazy discovery (N50)
+
+By default the server publishes only the 25 hot tools listed below at session
+start; the remaining ~70 schemas stay hidden in a deferred catalog and are
+fetched on demand via the `tools_search` discovery tool. Cold `tools/list`
+drops from ~88 tools down to ~28 — roughly 68% fewer schema bytes on the
+first round-trip — without giving up access to anything: the full surface is
+one `tools_search` call away.
+
+```jsonc
+// Browse — list deferred tool names without schemas.
+{"name":"tools_search","arguments":{}}
+
+// Fetch schemas for specific tools by name (auto-promotes them into tools/list).
+{"name":"tools_search","arguments":{"query":"select:flow_between,taint_paths,find_clones"}}
+
+// Keyword search with required-token filter, ranked, capped at max_results.
+{"name":"tools_search","arguments":{"query":"+overlay drop","max_results":5}}
+
+// Fuzzy keyword match across name + description.
+{"name":"tools_search","arguments":{"query":"memories invariants"}}
+```
+
+Returned tools are auto-promoted (`promote:false` opts out) and the server
+fires `notifications/tools/list_changed` for any client that subscribes.
+Set `GORTEX_LAZY_TOOLS=0` to opt every tool back into eager registration —
+useful for older MCP clients that don't speak the discovery flow.
 
 ### Core Navigation
 | Tool | Description |
@@ -938,6 +966,8 @@ gortex binary
 - Cross-repo: `cross_repo_calls` / `cross_repo_implements` / `cross_repo_extends` — materialised whenever a `calls` / `implements` / `extends` edge's endpoints live in different repos
 
 **Multi-repo fields:** Nodes carry `repo_prefix` (empty in single-repo mode). Edges carry `cross_repo` (true when connecting nodes in different repos). Node IDs use `<repo_prefix>/<path>::<Symbol>` format in multi-repo mode.
+
+**Test taxonomy:** functions and methods in test files carry `Meta["is_test"]` + `Meta["test_role"]` (`test` / `benchmark` / `fuzz` / `example`) + `Meta["test_runner"]`. The runner identifier is one of `gotest` / `pytest` / `unittest` / `rspec` / `minitest` / `test-unit` / `jest` / `vitest` / `mocha` / `bun-test` / `node-test` / `playwright` / `cypress`, resolved from parser-stamped imports (JS / TS) with a Mocha-TDD `suite()` byte fallback and language-default fill-in (Go is always `gotest`, Python defaults to `pytest`, Ruby uses the `_spec.rb` / `_test.rb` suffix). The owning `KindFile` also gets the same `test_runner` stamp so file-level queries can group tests by runner without walking functions.
 
 ## Language Support
 

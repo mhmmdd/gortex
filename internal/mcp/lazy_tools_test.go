@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -249,9 +248,9 @@ func TestToolsSearch_RequiredKeywordFiltering(t *testing.T) {
 // TestLazyRegistration_DisabledByEnvKeepsEverythingEager confirms the
 // opt-out switch for clients that don't speak the discovery flow.
 func TestLazyRegistration_DisabledByEnvKeepsEverythingEager(t *testing.T) {
+	// t.Setenv already restores the prior value on test exit; no
+	// extra Setenv / Unsetenv needed.
 	t.Setenv("GORTEX_LAZY_TOOLS", "0")
-	require.NoError(t, os.Setenv("GORTEX_LAZY_TOOLS", "0"))
-	defer os.Unsetenv("GORTEX_LAZY_TOOLS")
 
 	srv, _ := setupTestServer(t)
 	require.False(t, srv.lazy.Enabled(), "GORTEX_LAZY_TOOLS=0 must disable the registry")

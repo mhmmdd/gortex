@@ -8,6 +8,16 @@ import (
 	"github.com/zzet/gortex/internal/parser"
 )
 
+// Categories carried by SAST + adjacent rules. Free-form strings — the
+// only consumers are the analyze-side dispatcher and the rule audit;
+// the engine itself doesn't switch on these.
+const (
+	CategorySAST        = "sast"
+	CategoryHygiene     = "hygiene"
+	CategoryCorrectness = "correctness"
+	CategoryPerformance = "performance"
+)
+
 // Detector is one named structural rule. The Languages map carries
 // per-language tree-sitter S-expression queries; the engine compiles
 // them once per run and runs the appropriate one for each target's
@@ -20,6 +30,35 @@ type Detector struct {
 	Name        string
 	Description string
 	Severity    string
+
+	// Category lets the analyze layer fan rules out by purpose
+	// ("sast", "hygiene", "performance", "correctness"). Empty
+	// when the rule pre-dates the rule-library refactor — those
+	// inherit Category="" and surface only through the legacy
+	// unsafe_patterns bundle.
+	Category string
+
+	// CWE maps the rule to MITRE's Common Weakness Enumeration so
+	// SARIF / DefectDojo / GitHub Code Scanning consumers can join
+	// against canonical weakness IDs. Empty when the rule is pure
+	// hygiene with no security implication.
+	CWE string
+
+	// OWASP maps the rule to the OWASP Top 10 category, e.g.
+	// "A03:2021-Injection". Empty for non-web-app vulnerabilities.
+	OWASP string
+
+	// Tags are free-form taxonomy hooks: "injection", "deserialization",
+	// "crypto", "xxe", "ssrf", "path-traversal", "secrets",
+	// "deprecated", "django", "flask", etc. The analyze layer
+	// supports tag-based filtering (`tags:"crypto,deserialization"`).
+	Tags []string
+
+	// References are URLs / CWE links / Bandit plugin IDs (e.g.
+	// "B602", "bandit:subprocess_popen_with_shell_equals_true") so
+	// an agent can cross-check the rule's intent without re-deriving
+	// it from the description.
+	References []string
 
 	// Languages is keyed by the language string stored on KindFile
 	// nodes ("go", "python", "typescript", …). Each value is a
@@ -93,10 +132,17 @@ func DescribeDetectors() []DetectorInfo {
 			langs = append(langs, l)
 		}
 		sort.Strings(langs)
+		tags := append([]string(nil), d.Tags...)
+		refs := append([]string(nil), d.References...)
 		out = append(out, DetectorInfo{
 			Name:        d.Name,
 			Description: d.Description,
 			Severity:    d.Severity,
+			Category:    d.Category,
+			CWE:         d.CWE,
+			OWASP:       d.OWASP,
+			Tags:        tags,
+			References:  refs,
 			Languages:   langs,
 		})
 	}
@@ -104,11 +150,53 @@ func DescribeDetectors() []DetectorInfo {
 	return out
 }
 
+// DetectorsByCategory returns every registered rule whose Category
+// matches one of the requested labels. Empty `cats` returns all rules
+// (including legacy uncategorised ones). Used by the analyze layer
+// to fan out `sast` / `hygiene` / etc. bundles.
+func DetectorsByCategory(cats ...string) []*Detector {
+	want := make(map[string]struct{}, len(cats))
+	for _, c := range cats {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if c == "" {
+			continue
+		}
+		want[c] = struct{}{}
+	}
+	detectorMu.RLock()
+	defer detectorMu.RUnlock()
+	out := make([]*Detector, 0, len(detectorRegistry))
+	for _, d := range detectorRegistry {
+		if len(want) == 0 {
+			out = append(out, d)
+			continue
+		}
+		if _, ok := want[strings.ToLower(d.Category)]; ok {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// LookupDetector returns the detector with the given name. Used by
+// the analyze layer when fanning out a curated set; returns nil when
+// the name is unknown so callers can decide between skip and error.
+func LookupDetector(name string) *Detector {
+	d, _ := lookupDetector(name)
+	return d
+}
+
 // DetectorInfo is the read-only projection used by the MCP layer.
 type DetectorInfo struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Severity    string   `json:"severity"`
+	Category    string   `json:"category,omitempty"`
+	CWE         string   `json:"cwe,omitempty"`
+	OWASP       string   `json:"owasp,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	References  []string `json:"references,omitempty"`
 	Languages   []string `json:"languages"`
 }
 
