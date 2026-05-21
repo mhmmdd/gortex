@@ -152,6 +152,43 @@ func TestAnalyzeExternalCalls_ModulePathFilter(t *testing.T) {
 	}
 }
 
+// TestAnalyzeExternalCalls_SkipsSyntheticNodes confirms the rollup
+// composes with the resolver's external-call synthesis pass: a
+// synthetic KindModule placeholder (it carries Meta["synthetic"] but no
+// goanalysis attribution) must not surface as an empty 0/0 row.
+func TestAnalyzeExternalCalls_SkipsSyntheticNodes(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	addExternalModuleNode(srv.graph, "module::go:stdlib", "stdlib", "", "stdlib")
+	addExternalSymbolNode(srv.graph, "ext::go:fmt::Println", "Println", "fmt", "module::go:stdlib", graph.KindFunction)
+	addExternalCall(srv.graph, "main.go::A", "ext::go:fmt::Println")
+	// A synthetic external-call node — the shape the resolver's
+	// SynthesizeExternalCalls pass materialises for an un-indexed
+	// package. It must be ignored by this rollup.
+	srv.graph.AddNode(&graph.Node{
+		ID:       "external-call::dep::github.com/acme/widget",
+		Kind:     graph.KindModule,
+		Name:     "github.com/acme/widget",
+		Language: "go",
+		Meta: map[string]any{
+			"synthetic":     true,
+			"external_call": true,
+			"import_path":   "github.com/acme/widget",
+			"ecosystem":     "dep",
+		},
+	})
+	addExternalCall(srv.graph, "main.go::B", "external-call::dep::github.com/acme/widget")
+
+	out := callAnalyzeExternalCalls(t, srv, map[string]any{})
+	rows, _ := out["modules"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 module (synthetic node skipped), got %d", len(rows))
+	}
+	first := rows[0].(map[string]any)
+	if first["id"] != "module::go:stdlib" {
+		t.Errorf("synthetic node leaked into the rollup: %v", first["id"])
+	}
+}
+
 func TestAnalyzeExternalCalls_PerModuleSymbolDetail(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	addExternalModuleNode(srv.graph, "module::go:stdlib", "stdlib", "", "stdlib")

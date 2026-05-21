@@ -299,6 +299,14 @@ func (mi *MultiIndexer) RunGlobalGraphPasses() {
 			zap.Int("edges", temporalResolved),
 		)
 	}
+	// External-call placeholder synthesis (opt-in). Runs after the
+	// stub passes so only genuinely un-indexed external targets are
+	// left to materialise into call-chain terminals.
+	if extCalls := resolver.SynthesizeExternalCalls(mi.graph, mi.externalCallSynthesisEnabled()); extCalls > 0 {
+		mi.logger.Info("external-call placeholders synthesized (global)",
+			zap.Int("edges", extCalls),
+		)
+	}
 	// Cross-repo edge layer. Runs after InferImplements / InferOverrides
 	// so the implements / extends edges they materialise across repo
 	// boundaries pick up their parallel cross_repo_* edges.
@@ -324,6 +332,22 @@ func (mi *MultiIndexer) cloneThreshold() float64 {
 		}
 	}
 	return best
+}
+
+// externalCallSynthesisEnabled resolves whether external-call placeholder
+// synthesis should run over the shared graph. The pass is graph-wide, so
+// it is enabled when any tracked repo opted in — a repo that wants the
+// external hops in its call chains gets them even when a sibling repo
+// left the option off.
+func (mi *MultiIndexer) externalCallSynthesisEnabled() bool {
+	mi.mu.RLock()
+	defer mi.mu.RUnlock()
+	for _, idx := range mi.indexers {
+		if idx.externalCallSynthesisEnabled() {
+			return true
+		}
+	}
+	return false
 }
 
 // NewMultiIndexer creates a MultiIndexer.

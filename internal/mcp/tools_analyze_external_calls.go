@@ -73,6 +73,15 @@ func (s *Server) externalCallsRollup(ctx context.Context, req mcp.CallToolReques
 		if n == nil || n.Kind != graph.KindModule {
 			continue
 		}
+		// Skip synthetic module nodes — the resolver's external-call
+		// synthesis pass materialises a KindModule placeholder per
+		// un-indexed package so call chains keep the external hop, but
+		// those carry no goanalysis attribution and would only show as
+		// empty 0/0 rows here. This rollup is for type-checker-grounded
+		// module usage; synthetic nodes are surfaced via their edges.
+		if synthetic, _ := n.Meta["synthetic"].(bool); synthetic {
+			continue
+		}
 		moduleKind, _ := n.Meta["module_kind"].(string)
 		if moduleKindFilter != "" && moduleKind != moduleKindFilter {
 			continue

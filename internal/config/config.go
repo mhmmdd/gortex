@@ -430,6 +430,21 @@ type IndexConfig struct {
 	// trip it. In crash-isolation mode it also bounds the worker
 	// round-trip.
 	MaxExtractMillis int `mapstructure:"max_extract_millis" yaml:"max_extract_millis,omitempty"`
+	// SynthesizeExternalCalls turns a call into an un-indexed third
+	// party (an npm/pip/cargo package, or a sibling microservice) into
+	// an explicit graph terminal. Without it such a call edge stays an
+	// `unresolved::` placeholder with no destination node, and a
+	// call-chain walk silently stops there — losing the fact that the
+	// function reaches out to an external system at all. When on, the
+	// resolver synthesises a clearly-marked synthetic placeholder node
+	// for the external target and retargets the call edge to it, so
+	// `get_call_chain` / `get_callers` keep the external hop visible.
+	// Off by default — the synthesis is noise on a codebase that only
+	// wants intra-repo edges, so it is strictly opt-in and changes no
+	// behaviour unless enabled. Turn on via
+	// `.gortex.yaml::index::synthesize_external_calls: true` or the
+	// GORTEX_SYNTH_EXTERNAL_CALLS=1 environment override.
+	SynthesizeExternalCalls bool `mapstructure:"synthesize_external_calls" yaml:"synthesize_external_calls,omitempty"`
 	// Transforms are pluggable pre-ingestion content processors. Each
 	// rewrites a matching file's bytes before the parser sees them —
 	// expanding minified bundles, normalising SVG/TOON, converting a

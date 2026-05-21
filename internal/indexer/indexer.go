@@ -528,6 +528,15 @@ func (idx *Indexer) RunGlobalGraphPasses() {
 			zap.Int("edges", temporalResolved),
 		)
 	}
+	// External-call placeholder synthesis (opt-in). Runs after the
+	// resolver and the gRPC/Temporal stub passes so every edge that
+	// could land on a real node already has; the leftover external
+	// terminals are then materialised into synthetic call-chain nodes.
+	if extCalls := resolver.SynthesizeExternalCalls(idx.graph, idx.externalCallSynthesisEnabled()); extCalls > 0 {
+		idx.logger.Info("external-call placeholders synthesized (global)",
+			zap.Int("edges", extCalls),
+		)
+	}
 	// Cross-repo edge layer. Runs after InferImplements / InferOverrides
 	// so cross-repo implements / extends edges pick up their parallel
 	// cross_repo_* edges. No-op on single-repo graphs (no RepoPrefix).
@@ -1745,6 +1754,14 @@ func (idx *Indexer) IndexCtx(ctx context.Context, root string) (*IndexResult, er
 					zap.Int("edges", temporalResolved),
 				)
 			}
+			// External-call placeholder synthesis (opt-in) — runs after
+			// the resolver and stub passes so only genuinely un-indexed
+			// external targets are left to materialise.
+			if extCalls := resolver.SynthesizeExternalCalls(idx.graph, idx.externalCallSynthesisEnabled()); extCalls > 0 {
+				idx.logger.Info("external-call placeholders synthesized",
+					zap.Int("edges", extCalls),
+				)
+			}
 			// Reachability index — depth-1/2/3 incoming-reach sets on
 			// every impact seed, stamped into Node.Meta so AnalyzeImpact
 			// answers in O(seeds × reach) map lookups instead of a live
@@ -1996,6 +2013,10 @@ func (idx *Indexer) ResolveAll() {
 	// Temporal stub-call resolution piggybacks on the same staging —
 	// Java interface→impl propagation depends on EdgeImplements.
 	resolver.ResolveTemporalCalls(idx.graph)
+	// External-call placeholder synthesis (opt-in) — runs after the
+	// resolver and stub passes so only genuinely un-indexed external
+	// targets remain to materialise.
+	resolver.SynthesizeExternalCalls(idx.graph, idx.externalCallSynthesisEnabled())
 	// CPG-lite dataflow rewriting must run after the call resolver
 	// has lifted unresolved:: targets; arg_of edges then point at
 	// real function/method nodes whose param nodes can be found,
@@ -2440,6 +2461,10 @@ func (idx *Indexer) IncrementalReindex(root string) (*IndexResult, error) {
 		resolver.ResolveGRPCStubCalls(idx.graph)
 		// Temporal stub-call resolution — same re-run rationale.
 		resolver.ResolveTemporalCalls(idx.graph)
+		// External-call placeholder synthesis (opt-in) — re-run for the
+		// same reason: eviction can leave a previously-synthetic edge
+		// pointing at a stale terminal. The pass is a full recompute.
+		resolver.SynthesizeExternalCalls(idx.graph, idx.externalCallSynthesisEnabled())
 		// Clone detection is not re-run here: each stale file was
 		// re-indexed through IndexFile above, whose resolve pass
 		// already recomputed EdgeSimilarTo against the fresh graph,
