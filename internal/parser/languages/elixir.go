@@ -9,17 +9,6 @@ import (
 	"github.com/zzet/gortex/internal/parser/tsitter/elixir"
 )
 
-// Tree-sitter queries for Elixir.
-// Elixir's grammar represents everything as `call` nodes. We capture all calls
-// with an identifier target and filter by keyword in Go code.
-const (
-	// Plain function calls: func_name(args)
-	qExFuncCall = `(call target: (identifier) @call.name) @call.expr`
-
-	// Dot/qualified calls: Module.function(args)
-	qExDotCall = `(call target: (dot left: (_) @call.receiver right: (identifier) @call.method)) @call.expr`
-)
-
 // elixirKeywords are call targets that represent language constructs, not user calls.
 var elixirKeywords = map[string]bool{
 	"defmodule": true, "def": true, "defp": true,
@@ -30,22 +19,17 @@ var elixirKeywords = map[string]bool{
 	"test": true, "describe": true, "setup": true,
 }
 
-// ElixirExtractor extracts Elixir source files. Only two queries
-// (plain call + dot call), so we precompile each but don't merge.
-// extractCalls runs after walkNode so funcRanges is ready.
+// ElixirExtractor extracts Elixir source files. Elixir's grammar
+// represents nearly everything as `call` nodes, so extraction is a
+// single manual walkNode cursor: structural constructs (modules,
+// defs, imports, attributes) are dispatched as the walk descends, and
+// call sites inside each def body are collected in that same pass.
 type ElixirExtractor struct {
-	lang      *sitter.Language
-	qFuncCall *parser.PreparedQuery
-	qDotCall  *parser.PreparedQuery
+	lang *sitter.Language
 }
 
 func NewElixirExtractor() *ElixirExtractor {
-	lang := elixir.GetLanguage()
-	return &ElixirExtractor{
-		lang:      lang,
-		qFuncCall: parser.MustPreparedQuery(qExFuncCall, lang),
-		qDotCall:  parser.MustPreparedQuery(qExDotCall, lang),
-	}
+	return &ElixirExtractor{lang: elixir.GetLanguage()}
 }
 
 func (e *ElixirExtractor) Language() string     { return "elixir" }
@@ -71,10 +55,9 @@ func (e *ElixirExtractor) Extract(filePath string, src []byte) (*parser.Extracti
 	seen := make(map[string]bool)
 
 	// Walk the AST manually to handle Elixir's call-based structure.
+	// A single cursor: structural constructs are extracted as the walk
+	// descends and call sites are collected from each def body.
 	e.walkNode(root, src, filePath, fileNode.ID, "", result, seen)
-
-	// Call sites — only non-keyword calls.
-	e.extractCalls(root, src, filePath, result)
 
 	return result, nil
 }
@@ -165,7 +148,8 @@ func (e *ElixirExtractor) handleDefmodule(callNode *sitter.Node, src []byte, fil
 	}
 }
 
-// handleDef extracts a function or method node.
+// handleDef extracts a function or method node, then collects the
+// call sites inside its body in the same walk pass.
 func (e *ElixirExtractor) handleDef(callNode *sitter.Node, src []byte, filePath, fileID, currentModule string, isPrivate bool, result *parser.ExtractionResult, seen map[string]bool) {
 	funcName := e.extractFuncName(callNode, src)
 	if funcName == "" {
@@ -175,9 +159,10 @@ func (e *ElixirExtractor) handleDef(callNode *sitter.Node, src []byte, filePath,
 	startLine := int(callNode.StartPoint().Row) + 1
 	endLine := int(callNode.EndPoint().Row) + 1
 
+	var id string
 	if currentModule != "" {
 		// Function inside a module -> method with MemberOf edge.
-		id := filePath + "::" + currentModule + "." + funcName
+		id = filePath + "::" + currentModule + "." + funcName
 		if seen[id] {
 			return
 		}
@@ -208,7 +193,7 @@ func (e *ElixirExtractor) handleDef(callNode *sitter.Node, src []byte, filePath,
 		})
 	} else {
 		// Top-level function.
-		id := filePath + "::" + funcName
+		id = filePath + "::" + funcName
 		if seen[id] {
 			return
 		}
@@ -229,6 +214,14 @@ func (e *ElixirExtractor) handleDef(callNode *sitter.Node, src []byte, filePath,
 			From: fileID, To: id, Kind: graph.EdgeDefines,
 			FilePath: filePath, Line: startLine,
 		})
+	}
+
+	// Call sites inside the body are attributed to this def directly —
+	// exact attribution without a line-range lookup. walkNode does not
+	// descend into def bodies, so the body region is scanned here and
+	// every other region by walkNode: one cursor over the whole tree.
+	if body := e.findDoBlock(callNode); body != nil {
+		e.collectCalls(body, src, filePath, id, result)
 	}
 }
 
@@ -302,44 +295,67 @@ func (e *ElixirExtractor) handleAttribute(node *sitter.Node, src []byte, filePat
 	})
 }
 
-// extractCalls extracts call-site edges for non-keyword function calls.
-func (e *ElixirExtractor) extractCalls(root *sitter.Node, src []byte, filePath string, result *parser.ExtractionResult) {
-	funcRanges := buildFuncRanges(result)
+// collectCalls recursively scans a def body for call sites, emitting
+// one EdgeCalls per non-keyword call. The caller is the enclosing def,
+// passed in as callerID. Nested call nodes (`foo(bar())`) each emit
+// their own edge, matching the previous whole-tree query behaviour.
+func (e *ElixirExtractor) collectCalls(node *sitter.Node, src []byte, filePath, callerID string, result *parser.ExtractionResult) {
+	if node == nil {
+		return
+	}
+	if node.Type() == "call" {
+		e.emitCallEdge(node, src, filePath, callerID, result)
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		e.collectCalls(node.Child(i), src, filePath, callerID, result)
+	}
+}
 
-	// Dot calls: Module.function()
-	parser.EachMatch(e.qDotCall, root, src, func(m parser.QueryResult) {
-		method := m.Captures["call.method"].Text
-		expr := m.Captures["call.expr"]
-		callerID := findEnclosingFunc(funcRanges, expr.StartLine+1)
-		if callerID == "" {
-			return
+// emitCallEdge inspects a call node's target and emits the appropriate
+// EdgeCalls. A `dot` target is a qualified call (Module.fun ->
+// unresolved::*.fun); a plain identifier target is a local call
+// (unresolved::name), filtered against elixirKeywords / do / end.
+func (e *ElixirExtractor) emitCallEdge(callNode *sitter.Node, src []byte, filePath, callerID string, result *parser.ExtractionResult) {
+	line := int(callNode.StartPoint().Row) + 1
+	for i := 0; i < int(callNode.ChildCount()); i++ {
+		child := callNode.Child(i)
+		if child == nil || callNode.FieldNameForChild(i) != "target" {
+			continue
 		}
-		result.Edges = append(result.Edges, &graph.Edge{
-			From: callerID, To: "unresolved::*." + method,
-			Kind: graph.EdgeCalls, FilePath: filePath, Line: expr.StartLine + 1,
-		})
-	})
+		switch child.Type() {
+		case "dot":
+			method := e.dotCallMethod(child, src)
+			if method == "" {
+				return
+			}
+			result.Edges = append(result.Edges, &graph.Edge{
+				From: callerID, To: "unresolved::*." + method,
+				Kind: graph.EdgeCalls, FilePath: filePath, Line: line,
+			})
+		case "identifier":
+			name := child.Content(src)
+			if elixirKeywords[name] || name == "do" || name == "end" {
+				return
+			}
+			result.Edges = append(result.Edges, &graph.Edge{
+				From: callerID, To: "unresolved::" + name,
+				Kind: graph.EdgeCalls, FilePath: filePath, Line: line,
+			})
+		}
+		return
+	}
+}
 
-	// Plain calls: func_name() — filter out keywords.
-	parser.EachMatch(e.qFuncCall, root, src, func(m parser.QueryResult) {
-		name := m.Captures["call.name"].Text
-		if elixirKeywords[name] {
-			return
+// dotCallMethod returns the right-hand identifier of a `dot` node
+// (the method name in `Module.method`), or "" when absent.
+func (e *ElixirExtractor) dotCallMethod(dotNode *sitter.Node, src []byte) string {
+	for i := 0; i < int(dotNode.ChildCount()); i++ {
+		child := dotNode.Child(i)
+		if child != nil && dotNode.FieldNameForChild(i) == "right" && child.Type() == "identifier" {
+			return child.Content(src)
 		}
-		// Skip common Elixir macros/constructs.
-		if name == "do" || name == "end" {
-			return
-		}
-		expr := m.Captures["call.expr"]
-		callerID := findEnclosingFunc(funcRanges, expr.StartLine+1)
-		if callerID == "" {
-			return
-		}
-		result.Edges = append(result.Edges, &graph.Edge{
-			From: callerID, To: "unresolved::" + name,
-			Kind: graph.EdgeCalls, FilePath: filePath, Line: expr.StartLine + 1,
-		})
-	})
+	}
+	return ""
 }
 
 // --- AST helpers ---

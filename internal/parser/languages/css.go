@@ -9,31 +9,40 @@ import (
 	"github.com/zzet/gortex/internal/parser/tsitter/css"
 )
 
-// Tree-sitter query patterns for CSS files.
-const (
-	qCssImport = `(import_statement) @import.def`
-	qCssClass  = `(class_selector (class_name) @class.name) @class.def`
-	qCssId     = `(id_selector (id_name) @id.name) @id.def`
-)
+// qCssAll is a single tree-sitter query alternating over every pattern
+// the CSS extractor needs — @import rules, class selectors, id
+// selectors, and custom-property (`--name`) declarations. One cursor
+// walk per file replaces the three EachMatch passes plus the separate
+// recursive declaration walk the previous design made. Capture names
+// are disjoint across patterns so the dispatch in Extract branches on
+// which one is set.
+const qCssAll = `
+[
+  (import_statement) @import.def
 
-// CSSExtractor extracts CSS files into graph nodes and edges. Only
-// three queries, so the merged-alternation pattern wouldn't pay;
-// precompiling each query once at init still removes the per-file
-// sitter.NewQuery cost.
+  (class_selector
+    (class_name) @class.name) @class.def
+
+  (id_selector
+    (id_name) @id.name) @id.def
+
+  (declaration
+    (property_name) @prop.name) @prop.def
+]
+`
+
+// CSSExtractor extracts CSS files into graph nodes and edges. A single
+// precompiled alternation query drives one cursor walk per file.
 type CSSExtractor struct {
-	lang    *sitter.Language
-	qImport *parser.PreparedQuery
-	qClass  *parser.PreparedQuery
-	qID     *parser.PreparedQuery
+	lang *sitter.Language
+	qAll *parser.PreparedQuery
 }
 
 func NewCSSExtractor() *CSSExtractor {
 	lang := css.GetLanguage()
 	return &CSSExtractor{
-		lang:    lang,
-		qImport: parser.MustPreparedQuery(qCssImport, lang),
-		qClass:  parser.MustPreparedQuery(qCssClass, lang),
-		qID:     parser.MustPreparedQuery(qCssId, lang),
+		lang: lang,
+		qAll: parser.MustPreparedQuery(qCssAll, lang),
 	}
 }
 
@@ -55,126 +64,93 @@ func (e *CSSExtractor) Extract(filePath string, src []byte) (*parser.ExtractionR
 		FilePath: filePath, StartLine: 1, EndLine: int(root.EndPoint().Row) + 1,
 		Language: "css",
 	}
+	fileID := fileNode.ID
 	result.Nodes = append(result.Nodes, fileNode)
 
 	seen := make(map[string]bool)
 
-	// @import rules.
-	e.extractImports(root, src, filePath, fileNode.ID, result)
+	parser.EachMatch(e.qAll, root, src, func(m parser.QueryResult) {
+		switch {
 
-	// Class selectors.
-	e.extractClasses(root, src, filePath, fileNode.ID, result, seen)
+		case m.Captures["import.def"] != nil:
+			def := m.Captures["import.def"]
+			// Extract the path from @import url("...") or @import "...".
+			importPath := extractCSSImportPath(def.Text)
+			if importPath == "" {
+				return
+			}
+			result.Edges = append(result.Edges, &graph.Edge{
+				From:     fileID,
+				To:       "unresolved::import::" + importPath,
+				Kind:     graph.EdgeImports,
+				FilePath: filePath,
+				Line:     def.StartLine + 1,
+			})
 
-	// ID selectors.
-	e.extractIDs(root, src, filePath, fileNode.ID, result, seen)
+		case m.Captures["class.def"] != nil:
+			name := m.Captures["class.name"].Text
+			def := m.Captures["class.def"]
+			id := filePath + "::." + name
+			if seen[id] {
+				return
+			}
+			seen[id] = true
+			result.Nodes = append(result.Nodes, &graph.Node{
+				ID: id, Kind: graph.KindType, Name: "." + name,
+				FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,
+				Language: "css",
+			})
+			result.Edges = append(result.Edges, &graph.Edge{
+				From: fileID, To: id, Kind: graph.EdgeDefines,
+				FilePath: filePath, Line: def.StartLine + 1,
+			})
 
-	// CSS custom properties (--variable-name).
-	e.extractCustomProperties(root, src, filePath, fileNode.ID, result, seen)
+		case m.Captures["id.def"] != nil:
+			name := m.Captures["id.name"].Text
+			def := m.Captures["id.def"]
+			id := filePath + "::#" + name
+			if seen[id] {
+				return
+			}
+			seen[id] = true
+			result.Nodes = append(result.Nodes, &graph.Node{
+				ID: id, Kind: graph.KindVariable, Name: "#" + name,
+				FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,
+				Language: "css",
+			})
+			result.Edges = append(result.Edges, &graph.Edge{
+				From: fileID, To: id, Kind: graph.EdgeDefines,
+				FilePath: filePath, Line: def.StartLine + 1,
+			})
+
+		case m.Captures["prop.def"] != nil:
+			// CSS custom properties — declarations whose property
+			// name starts with "--".
+			name := m.Captures["prop.name"].Text
+			if !strings.HasPrefix(name, "--") {
+				return
+			}
+			def := m.Captures["prop.def"]
+			id := filePath + "::" + name
+			if seen[id] {
+				return
+			}
+			seen[id] = true
+			result.Nodes = append(result.Nodes, &graph.Node{
+				ID: id, Kind: graph.KindVariable, Name: name,
+				FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,
+				Language: "css", Meta: map[string]any{
+					"custom_property": true,
+				},
+			})
+			result.Edges = append(result.Edges, &graph.Edge{
+				From: fileID, To: id, Kind: graph.EdgeDefines,
+				FilePath: filePath, Line: def.StartLine + 1,
+			})
+		}
+	})
 
 	return result, nil
-}
-
-func (e *CSSExtractor) extractImports(root *sitter.Node, src []byte, filePath, fileID string, result *parser.ExtractionResult) {
-	parser.EachMatch(e.qImport, root, src, func(m parser.QueryResult) {
-		def := m.Captures["import.def"]
-		importText := def.Text
-		// Extract the path from @import url("...") or @import "..."
-		importPath := extractCSSImportPath(importText)
-		if importPath == "" {
-			return
-		}
-		result.Edges = append(result.Edges, &graph.Edge{
-			From:     fileID,
-			To:       "unresolved::import::" + importPath,
-			Kind:     graph.EdgeImports,
-			FilePath: filePath,
-			Line:     def.StartLine + 1,
-		})
-	})
-}
-
-func (e *CSSExtractor) extractClasses(root *sitter.Node, src []byte, filePath, fileID string, result *parser.ExtractionResult, seen map[string]bool) {
-	parser.EachMatch(e.qClass, root, src, func(m parser.QueryResult) {
-		name := m.Captures["class.name"].Text
-		def := m.Captures["class.def"]
-		id := filePath + "::." + name
-		if seen[id] {
-			return
-		}
-		seen[id] = true
-		result.Nodes = append(result.Nodes, &graph.Node{
-			ID: id, Kind: graph.KindType, Name: "." + name,
-			FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,
-			Language: "css",
-		})
-		result.Edges = append(result.Edges, &graph.Edge{
-			From: fileID, To: id, Kind: graph.EdgeDefines,
-			FilePath: filePath, Line: def.StartLine + 1,
-		})
-	})
-}
-
-func (e *CSSExtractor) extractIDs(root *sitter.Node, src []byte, filePath, fileID string, result *parser.ExtractionResult, seen map[string]bool) {
-	parser.EachMatch(e.qID, root, src, func(m parser.QueryResult) {
-		name := m.Captures["id.name"].Text
-		def := m.Captures["id.def"]
-		id := filePath + "::#" + name
-		if seen[id] {
-			return
-		}
-		seen[id] = true
-		result.Nodes = append(result.Nodes, &graph.Node{
-			ID: id, Kind: graph.KindVariable, Name: "#" + name,
-			FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,
-			Language: "css",
-		})
-		result.Edges = append(result.Edges, &graph.Edge{
-			From: fileID, To: id, Kind: graph.EdgeDefines,
-			FilePath: filePath, Line: def.StartLine + 1,
-		})
-	})
-}
-
-func (e *CSSExtractor) extractCustomProperties(root *sitter.Node, src []byte, filePath, fileID string, result *parser.ExtractionResult, seen map[string]bool) {
-	// Walk the AST to find declaration nodes with property_name starting with "--".
-	e.walkForCustomProps(root, src, filePath, fileID, result, seen)
-}
-
-func (e *CSSExtractor) walkForCustomProps(node *sitter.Node, src []byte, filePath, fileID string, result *parser.ExtractionResult, seen map[string]bool) {
-	if node.Type() == "declaration" {
-		// Look for property_name child that starts with "--".
-		for i := 0; i < int(node.ChildCount()); i++ {
-			child := node.Child(i)
-			if child != nil && child.Type() == "property_name" {
-				propName := child.Content(src)
-				if strings.HasPrefix(propName, "--") {
-					id := filePath + "::" + propName
-					if !seen[id] {
-						seen[id] = true
-						result.Nodes = append(result.Nodes, &graph.Node{
-							ID: id, Kind: graph.KindVariable, Name: propName,
-							FilePath: filePath, StartLine: int(node.StartPoint().Row) + 1, EndLine: int(node.EndPoint().Row) + 1,
-							Language: "css", Meta: map[string]any{
-								"custom_property": true,
-							},
-						})
-						result.Edges = append(result.Edges, &graph.Edge{
-							From: fileID, To: id, Kind: graph.EdgeDefines,
-							FilePath: filePath, Line: int(node.StartPoint().Row) + 1,
-						})
-					}
-				}
-				break
-			}
-		}
-	}
-
-	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(i)
-		if child != nil {
-			e.walkForCustomProps(child, src, filePath, fileID, result, seen)
-		}
-	}
 }
 
 // extractCSSImportPath extracts the path from an @import statement.
