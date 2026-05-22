@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/zzet/gortex/internal/contracts"
 	"github.com/zzet/gortex/internal/graph"
+	"github.com/zzet/gortex/internal/search"
 )
 
 // TestSnapshotRoundTrip proves that save + load preserves nodes and
@@ -29,7 +32,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	orig.AddNode(&graph.Node{ID: "b.go::Bar", Name: "Bar", Kind: graph.KindMethod, FilePath: "b.go"})
 	orig.AddEdge(&graph.Edge{From: "b.go::Bar", To: "a.go::Foo", Kind: graph.EdgeCalls, FilePath: "b.go", Line: 12})
 
-	saveSnapshot(orig, nil, nil, version, zap.NewNop())
+	saveSnapshot(orig, nil, nil, snapshotVector{}, version, zap.NewNop())
 
 	restored := graph.New()
 	result, err := loadSnapshot(restored, zap.NewNop())
@@ -44,6 +47,122 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	n := restored.GetNode("a.go::Foo")
 	require.NotNil(t, n)
 	assert.Equal(t, "Foo", n.Name)
+}
+
+// buildTestVectorIndex builds a small HNSW vector index and returns it
+// serialized as a snapshotVector — the shape the daemon snapshot path
+// persists.
+func buildTestVectorIndex(t *testing.T) snapshotVector {
+	t.Helper()
+	const dims = 4
+	vec := search.NewVector(dims)
+	vec.Add("a.go::Foo", []float32{1, 0, 0, 0})
+	vec.Add("b.go::Bar", []float32{0, 1, 0, 0})
+	vec.Add("c.go::Baz", []float32{0, 0, 1, 0})
+
+	var buf bytes.Buffer
+	require.NoError(t, vec.Save(&buf))
+	return snapshotVector{Index: buf.Bytes(), Dims: dims, Count: vec.Count()}
+}
+
+// TestSnapshotRoundTrip_VectorIndex proves the schema-v3 vector-index
+// fields survive a save + load cycle. Without this the daemon would
+// re-embed the whole graph on every restart.
+func TestSnapshotRoundTrip_VectorIndex(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GORTEX_DAEMON_SNAPSHOT", filepath.Join(dir, "snap.gob.gz"))
+
+	orig := graph.New()
+	orig.AddNode(&graph.Node{ID: "a.go::Foo", Name: "Foo", Kind: graph.KindFunction, FilePath: "a.go"})
+
+	want := buildTestVectorIndex(t)
+	saveSnapshot(orig, nil, nil, want, version, zap.NewNop())
+
+	restored := graph.New()
+	result, err := loadSnapshot(restored, zap.NewNop())
+	require.NoError(t, err)
+	require.True(t, result.Loaded)
+
+	got := result.Vector
+	assert.Equal(t, want.Dims, got.Dims, "vector dims must round-trip")
+	assert.Equal(t, want.Count, got.Count, "vector count must round-trip")
+	require.Equal(t, want.Index, got.Index, "serialized vector index bytes must round-trip")
+
+	// The restored bytes must rehydrate into a usable HNSW index.
+	rebuilt := search.NewVector(got.Dims)
+	require.NoError(t, rebuilt.LoadFrom(bytes.NewReader(got.Index)))
+	rebuilt.SetCount(got.Count)
+	hits := rebuilt.Search([]float32{1, 0, 0, 0}, 1)
+	require.Len(t, hits, 1)
+	assert.Equal(t, "a.go::Foo", hits[0], "restored index must answer nearest-neighbour queries")
+}
+
+// TestMigrateSnapshotV2toV3 proves the v2→v3 migration re-stamps the
+// schema version and preserves every node / edge / repo / contract
+// record. The record shapes are identical across the two versions, so
+// a v2 stream encoded with the current types and SchemaVersion=2
+// faithfully stands in for a real on-disk v2 snapshot.
+func TestMigrateSnapshotV2toV3(t *testing.T) {
+	var v2 bytes.Buffer
+	enc := gob.NewEncoder(&v2)
+	hdr := snapshotHeader{
+		SchemaVersion: 2,
+		Version:       version,
+		NodeCount:     2,
+		EdgeCount:     1,
+		RepoCount:     1,
+	}
+	require.NoError(t, enc.Encode(hdr))
+	require.NoError(t, enc.Encode(graph.Node{ID: "a.go::Foo", Name: "Foo", Kind: graph.KindFunction, FilePath: "a.go"}))
+	require.NoError(t, enc.Encode(graph.Node{ID: "b.go::Bar", Name: "Bar", Kind: graph.KindMethod, FilePath: "b.go"}))
+	require.NoError(t, enc.Encode(graph.Edge{From: "b.go::Bar", To: "a.go::Foo", Kind: graph.EdgeCalls}))
+	require.NoError(t, enc.Encode(snapshotRepo{RepoPrefix: "repo", RootPath: "/tmp/repo"}))
+
+	var v3 bytes.Buffer
+	require.NoError(t, migrateSnapshotV2toV3(&v2, &v3))
+
+	dec := gob.NewDecoder(&v3)
+	var migrated snapshotHeader
+	require.NoError(t, dec.Decode(&migrated))
+	assert.Equal(t, 3, migrated.SchemaVersion, "migration must bump the schema version")
+	assert.Equal(t, 2, migrated.NodeCount, "node count must survive")
+	assert.Equal(t, 1, migrated.RepoCount, "repo count must survive")
+
+	for i := 0; i < migrated.NodeCount; i++ {
+		var n graph.Node
+		require.NoError(t, dec.Decode(&n), "every node record must decode from the migrated stream")
+		assert.NotEmpty(t, n.ID)
+	}
+	for i := 0; i < migrated.EdgeCount; i++ {
+		var e graph.Edge
+		require.NoError(t, dec.Decode(&e))
+		assert.Equal(t, "b.go::Bar", e.From)
+	}
+	for i := 0; i < migrated.RepoCount; i++ {
+		var r snapshotRepo
+		require.NoError(t, dec.Decode(&r))
+		assert.Equal(t, "repo", r.RepoPrefix)
+	}
+}
+
+// TestSnapshotRoundTrip_NoVectorIndex asserts a snapshot written with
+// no vector data loads with an empty snapshotVector — the embeddings-
+// disabled path must not synthesise a phantom index.
+func TestSnapshotRoundTrip_NoVectorIndex(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GORTEX_DAEMON_SNAPSHOT", filepath.Join(dir, "snap.gob.gz"))
+
+	orig := graph.New()
+	orig.AddNode(&graph.Node{ID: "a.go::Foo", Name: "Foo", Kind: graph.KindFunction, FilePath: "a.go"})
+	saveSnapshot(orig, nil, nil, snapshotVector{}, version, zap.NewNop())
+
+	restored := graph.New()
+	result, err := loadSnapshot(restored, zap.NewNop())
+	require.NoError(t, err)
+	require.True(t, result.Loaded)
+
+	assert.Nil(t, result.Vector.Index, "no vector data written → none restored")
+	assert.Zero(t, result.Vector.Count)
 }
 
 // TestLoadSnapshot_DropsStaleAbsPathNodes guards against the T0.2 symptom
@@ -89,7 +208,7 @@ func TestLoadSnapshot_DropsStaleAbsPathNodes(t *testing.T) {
 		Kind: graph.EdgeCalls,
 	})
 
-	saveSnapshot(orig, nil, nil, version, zap.NewNop())
+	saveSnapshot(orig, nil, nil, snapshotVector{}, version, zap.NewNop())
 
 	restored := graph.New()
 	result, err := loadSnapshot(restored, zap.NewNop())
@@ -136,7 +255,7 @@ func TestSnapshotRoundTrip_NodeMetaWithShape(t *testing.T) {
 		},
 	})
 
-	saveSnapshot(orig, nil, nil, version, zap.NewNop())
+	saveSnapshot(orig, nil, nil, snapshotVector{}, version, zap.NewNop())
 
 	info, err := os.Stat(path)
 	require.NoError(t, err, "snapshot file must exist — encode must not have aborted")
@@ -186,7 +305,7 @@ func TestSnapshotRoundTrip_NodeMetaWithGenericTypes(t *testing.T) {
 		},
 	})
 
-	saveSnapshot(orig, nil, nil, version, zap.NewNop())
+	saveSnapshot(orig, nil, nil, snapshotVector{}, version, zap.NewNop())
 
 	info, err := os.Stat(path)
 	require.NoError(t, err, "snapshot file must exist — encode must not have aborted")
@@ -240,7 +359,7 @@ func TestSnapshotRoundTrip_ContractMetaWithSliceOfMaps(t *testing.T) {
 		},
 	}}
 
-	saveSnapshot(orig, nil, snapContracts, version, zap.NewNop())
+	saveSnapshot(orig, nil, snapContracts, snapshotVector{}, version, zap.NewNop())
 
 	info, err := os.Stat(path)
 	require.NoError(t, err, "snapshot file must exist — encode must not have aborted on []map[string]any")
@@ -286,7 +405,7 @@ func TestLoadSnapshot_BinaryVersionMismatch_Discards(t *testing.T) {
 	// Write a snapshot stamped with a different binary version.
 	src := graph.New()
 	src.AddNode(&graph.Node{ID: "a.go::Foo", Kind: graph.KindFunction, Name: "Foo", FilePath: "a.go", Language: "go"})
-	require.NoError(t, saveSnapshotTo(src, nil, nil, "0.0.0-from-an-older-daemon", path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(src, nil, nil, snapshotVector{}, "0.0.0-from-an-older-daemon", path, zap.NewNop()))
 
 	g := graph.New()
 	result, err := loadSnapshot(g, zap.NewNop())
@@ -304,7 +423,7 @@ func TestLoadSnapshot_SameBinaryVersion_Loads(t *testing.T) {
 
 	src := graph.New()
 	src.AddNode(&graph.Node{ID: "a.go::Foo", Kind: graph.KindFunction, Name: "Foo", FilePath: "a.go", Language: "go"})
-	require.NoError(t, saveSnapshotTo(src, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(src, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	g := graph.New()
 	result, err := loadSnapshot(g, zap.NewNop())
@@ -341,7 +460,7 @@ func TestLoadSnapshot_CorruptionDetected_ForcesFreshIndex(t *testing.T) {
 			Kind: graph.EdgeCalls,
 		})
 	}
-	require.NoError(t, saveSnapshotTo(orig, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(orig, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	g := graph.New()
 	result, err := loadSnapshot(g, zap.NewNop())
@@ -380,7 +499,7 @@ func TestLoadSnapshot_SmallStaleEdgeDrops_StaysLoaded(t *testing.T) {
 			From: "a.go::S0", To: fmt.Sprintf("/abs/a.go::S%d", i), Kind: graph.EdgeCalls,
 		})
 	}
-	require.NoError(t, saveSnapshotTo(orig, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(orig, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	g := graph.New()
 	result, err := loadSnapshot(g, zap.NewNop())
@@ -425,7 +544,7 @@ func TestSaveSnapshot_ShrinkGuardBlocksCollapse(t *testing.T) {
 			})
 		}
 	}
-	require.NoError(t, saveSnapshotTo(healthy, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(healthy, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	// A collapsed graph — 10 nodes, ~5% of the baseline. Attempting to
 	// persist it must be refused.
@@ -439,7 +558,7 @@ func TestSaveSnapshot_ShrinkGuardBlocksCollapse(t *testing.T) {
 	}
 	// The guard's refusal is not surfaced as an error — keeping the
 	// good snapshot is a success outcome.
-	require.NoError(t, saveSnapshotTo(collapsed, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(collapsed, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	// The on-disk snapshot must still be the healthy 200-node one.
 	hdr, ok := readSnapshotHeader(path)
@@ -467,7 +586,7 @@ func TestSaveSnapshot_ShrinkGuardAllowsModestShrink(t *testing.T) {
 			RepoPrefix: "repo",
 		})
 	}
-	require.NoError(t, saveSnapshotTo(big, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(big, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	// 150 nodes — 75% retained, well above the 50% floor. A legitimate
 	// shrink that must be allowed through.
@@ -479,7 +598,7 @@ func TestSaveSnapshot_ShrinkGuardAllowsModestShrink(t *testing.T) {
 			RepoPrefix: "repo",
 		})
 	}
-	require.NoError(t, saveSnapshotTo(smaller, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(smaller, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	hdr, ok := readSnapshotHeader(path)
 	require.True(t, ok)
@@ -495,7 +614,7 @@ func TestSaveSnapshot_ShrinkGuardAllowsFirstWrite(t *testing.T) {
 
 	g := graph.New()
 	g.AddNode(&graph.Node{ID: "a.go::Foo", Kind: graph.KindFunction, Name: "Foo", FilePath: "a.go", Language: "go"})
-	require.NoError(t, saveSnapshotTo(g, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(g, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	hdr, ok := readSnapshotHeader(path)
 	require.True(t, ok, "the first snapshot must be written even though it is small")
@@ -523,7 +642,7 @@ func TestSnapshotWouldCollapse_EdgeOnlyCollapseIsBlocked(t *testing.T) {
 			})
 		}
 	}
-	require.NoError(t, saveSnapshotTo(healthy, nil, nil, version, path, zap.NewNop()))
+	require.NoError(t, saveSnapshotTo(healthy, nil, nil, snapshotVector{}, version, path, zap.NewNop()))
 
 	// All 100 nodes retained, but only 5 of 99 edges — the call graph
 	// has collapsed. The guard must catch the edge-side collapse.

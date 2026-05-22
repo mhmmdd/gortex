@@ -14,7 +14,6 @@ import (
 	"github.com/zzet/gortex/internal/config"
 	"github.com/zzet/gortex/internal/contracts"
 	"github.com/zzet/gortex/internal/daemon"
-	"github.com/zzet/gortex/internal/embedding"
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/indexer"
 	gortexmcp "github.com/zzet/gortex/internal/mcp"
@@ -159,19 +158,19 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	// Set up embedding provider for semantic search. Held in a local
 	// variable so it can be plumbed into MultiIndexer below — without
 	// that, per-repo indexers created by MultiIndexer have embedder=nil
-	// and skip the vector pass.
-	var embedder embedding.Provider
-	if mcpEmbeddingsURL != "" {
-		embedder = embedding.NewAPIProvider(mcpEmbeddingsURL, mcpEmbeddingsModel)
-		fmt.Fprintf(os.Stderr, "[gortex] semantic search enabled (API: %s)\n", mcpEmbeddingsURL)
-	} else if mcpEmbeddings {
-		e, err := embedding.NewLocalProvider()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[gortex] warning: embeddings disabled: %v\n", err)
-		} else {
-			embedder = e
-			fmt.Fprintf(os.Stderr, "[gortex] semantic search enabled (local)\n")
-		}
+	// and skip the vector pass. resolveEmbedder applies the precedence
+	// explicit flag/env > `embedding:` config > default-on static, so
+	// a stock install gets semantic search with no flags.
+	embedder, embDesc, embErr := resolveEmbedder(embedderRequest{
+		flagChanged: cmd.Flags().Changed("embeddings"),
+		flagEnabled: mcpEmbeddings,
+		flagURL:     mcpEmbeddingsURL,
+		flagModel:   mcpEmbeddingsModel,
+	}, cfg)
+	if embErr != nil {
+		fmt.Fprintf(os.Stderr, "[gortex] warning: embeddings disabled: %v\n", embErr)
+	} else if embedder != nil {
+		fmt.Fprintf(os.Stderr, "[gortex] semantic search enabled (%s)\n", embDesc)
 	}
 	if embedder != nil {
 		idx.SetEmbedder(embedder)

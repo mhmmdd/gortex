@@ -191,7 +191,7 @@ func runEnrichAll(cmd *cobra.Command, args []string) error {
 	}
 
 	if enrichAllSnapshot != "" {
-		if err := saveSnapshotTo(g, nil, nil, "gortex-enrich-all", enrichAllSnapshot, logger); err != nil {
+		if err := saveSnapshotTo(g, nil, nil, snapshotVector{}, "gortex-enrich-all", enrichAllSnapshot, logger); err != nil {
 			return fmt.Errorf("write snapshot %s: %w", enrichAllSnapshot, err)
 		}
 		result["snapshot"] = enrichAllSnapshot
@@ -236,7 +236,7 @@ func runEnrichReleases(cmd *cobra.Command, args []string) error {
 		"root":     idx.RootPath(),
 	}
 	if enrichReleasesSnapshot != "" {
-		if err := saveSnapshotTo(g, nil, nil, "gortex-enrich-releases", enrichReleasesSnapshot, logger); err != nil {
+		if err := saveSnapshotTo(g, nil, nil, snapshotVector{}, "gortex-enrich-releases", enrichReleasesSnapshot, logger); err != nil {
 			return fmt.Errorf("write snapshot %s: %w", enrichReleasesSnapshot, err)
 		}
 		result["snapshot"] = enrichReleasesSnapshot
@@ -281,7 +281,7 @@ func runEnrichCochange(cmd *cobra.Command, args []string) error {
 		"root":     idx.RootPath(),
 	}
 	if enrichCochangeSnapshot != "" {
-		if err := saveSnapshotTo(g, nil, nil, "gortex-enrich-cochange", enrichCochangeSnapshot, logger); err != nil {
+		if err := saveSnapshotTo(g, nil, nil, snapshotVector{}, "gortex-enrich-cochange", enrichCochangeSnapshot, logger); err != nil {
 			return fmt.Errorf("write snapshot %s: %w", enrichCochangeSnapshot, err)
 		}
 		result["snapshot"] = enrichCochangeSnapshot
@@ -326,7 +326,7 @@ func runEnrichBlame(cmd *cobra.Command, args []string) error {
 		"root":     idx.RootPath(),
 	}
 	if enrichBlameSnapshot != "" {
-		if err := saveSnapshotTo(g, nil, nil, "gortex-enrich-blame", enrichBlameSnapshot, logger); err != nil {
+		if err := saveSnapshotTo(g, nil, nil, snapshotVector{}, "gortex-enrich-blame", enrichBlameSnapshot, logger); err != nil {
 			return fmt.Errorf("write snapshot %s: %w", enrichBlameSnapshot, err)
 		}
 		result["snapshot"] = enrichBlameSnapshot
@@ -378,7 +378,7 @@ func runEnrichCoverage(cmd *cobra.Command, args []string) error {
 		"root":        idx.RootPath(),
 	}
 	if enrichCoverageSnapshot != "" {
-		if err := saveSnapshotTo(g, nil, nil, "gortex-enrich-coverage", enrichCoverageSnapshot, logger); err != nil {
+		if err := saveSnapshotTo(g, nil, nil, snapshotVector{}, "gortex-enrich-coverage", enrichCoverageSnapshot, logger); err != nil {
 			return fmt.Errorf("write snapshot %s: %w", enrichCoverageSnapshot, err)
 		}
 		result["snapshot"] = enrichCoverageSnapshot

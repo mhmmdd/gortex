@@ -17,7 +17,6 @@ import (
 	"github.com/zzet/gortex/internal/config"
 	"github.com/zzet/gortex/internal/contracts"
 	"github.com/zzet/gortex/internal/daemon"
-	"github.com/zzet/gortex/internal/embedding"
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/indexer"
 	gortexmcp "github.com/zzet/gortex/internal/mcp"
@@ -64,6 +63,12 @@ type daemonState struct {
 	// callers in source. The IncrementalReindex path never re-resolves
 	// unchanged files, so the lost edges are invisible to it.
 	snapshotPartial bool
+	// snapshotVector carries the workspace-global semantic-search
+	// vector index restored from the snapshot. When its Index is
+	// non-empty and an embedder is configured, warmupDaemonState
+	// restores it after the per-repo re-index loop (which it runs with
+	// vector building skipped) instead of re-embedding the whole graph.
+	snapshotVector snapshotVector
 	// MultiWatcher is built by warmupDaemonState (after tracked repos
 	// have been re-indexed) and handed to realController via
 	// AttachWatcher — it isn't held on daemonState because no caller
@@ -318,34 +323,27 @@ func buildDaemonState(logger *zap.Logger) (*daemonState, error) {
 			zap.Strings("lsp_auto_registered", autoRegistered))
 	}
 
-	// Embeddings are OPT-IN on the daemon. Enabled by any of:
-	//   --embeddings (CLI flag on `gortex daemon start`)
-	//   GORTEX_EMBEDDINGS=1 / true / yes / on (env var)
-	//   GORTEX_EMBEDDINGS_URL=<url> (routes to an OpenAI-compat API)
-	//
-	// Why opt-in: the bundled Hugot MiniLM-L6-v2 model adds an ~87 MB
-	// silent download on first use and blocks warmup for ~60 ms per
-	// indexed symbol (≈8 min per 8k-symbol repo, hours on multi-repo
-	// setups). On our own retrieval fixture, BM25 beats static-GloVe
-	// semantic by 4×+ on every tier — most users never need semantic
-	// at all, and those who do can opt in explicitly.
-	var embedder embedding.Provider
-	apiURL := os.Getenv("GORTEX_EMBEDDINGS_URL")
+	// Embeddings on the daemon follow the precedence explicit flag/env
+	// > `embedding:` config > default. The default is semantic search
+	// ON with the static GloVe provider — it needs zero download and
+	// is CPU-only, so the zero-config promise still holds. An explicit
+	// opt-in to the transformer backend (`provider: local`, or
+	// GORTEX_EMBEDDINGS with no config) still pays the ~87 MB MiniLM
+	// download on first use and the per-symbol warmup cost; static is
+	// the default precisely to avoid that.
+	embedder, embDesc, embErr := resolveEmbedder(embedderRequest{
+		flagChanged: daemonEmbeddingsChanged,
+		flagEnabled: daemonEmbeddings,
+	}, cfg)
 	switch {
-	case apiURL != "":
-		embedder = embedding.NewAPIProvider(apiURL, os.Getenv("GORTEX_EMBEDDINGS_MODEL"))
-		logger.Info("daemon: embeddings enabled (api)", zap.String("url", apiURL))
-	case daemonEmbeddings || isTruthyEnv("GORTEX_EMBEDDINGS"):
-		if e, embErr := embedding.NewLocalProvider(); embErr == nil {
-			embedder = e
-			logger.Info("daemon: embeddings enabled (local)",
-				zap.String("type", fmt.Sprintf("%T", e)),
-				zap.Int("dim", e.Dimensions()))
-		} else {
-			logger.Warn("daemon: embeddings requested but unavailable", zap.Error(embErr))
-		}
+	case embErr != nil:
+		logger.Warn("daemon: embeddings requested but unavailable", zap.Error(embErr))
+	case embedder != nil:
+		logger.Info("daemon: embeddings enabled",
+			zap.String("provider", embDesc),
+			zap.Int("dim", embedder.Dimensions()))
 	default:
-		logger.Info("daemon: embeddings disabled (default) — set --embeddings or GORTEX_EMBEDDINGS=1 to enable")
+		logger.Info("daemon: embeddings disabled — set embedding.enabled: false in config, or pass --embeddings / GORTEX_EMBEDDINGS to override")
 	}
 	if embedder != nil {
 		idx.SetEmbedder(embedder)
@@ -364,6 +362,19 @@ func buildDaemonState(logger *zap.Logger) (*daemonState, error) {
 		// daemon-tracked repos end up with text-only search.
 		if embedder != nil {
 			mi.SetEmbedder(embedder)
+			// When the snapshot already carries the workspace vector
+			// index and its dimensionality matches the active embedder,
+			// run the warmup re-index with vector building skipped —
+			// warmupDaemonState restores the cached index in one shot
+			// afterwards. Re-embedding the whole graph only to overwrite
+			// it with the cache is the dominant default-on restart cost.
+			vec := loadResult.Vector
+			if len(vec.Index) > 0 && vec.Dims == embedder.Dimensions() {
+				mi.SetSkipVectorBuild(true)
+				logger.Info("daemon: snapshot carries vector index — warmup will restore it instead of re-embedding",
+					zap.Int("vectors", vec.Count),
+					zap.Int("dims", vec.Dims))
+			}
 		}
 		// Propagate the resolve-time LSP helper so every per-repo
 		// Indexer constructed by the MultiIndexer's warmup /
@@ -474,6 +485,7 @@ func buildDaemonState(logger *zap.Logger) (*daemonState, error) {
 		snapshotRepos:       loadResult.Repos,
 		snapshotContracts:   loadResult.Contracts,
 		snapshotPartial:     loadResult.Partial,
+		snapshotVector:      loadResult.Vector,
 		resolverLSPRegistry: resolverLSPRegistry,
 		lspRouter:           lspRouterOut,
 	}, nil
@@ -783,6 +795,27 @@ func warmupDaemonState(state *daemonState, logger *zap.Logger) *indexer.MultiWat
 		"elapsed_ms": time.Since(phaseStart).Milliseconds(),
 	})
 
+	// Restore the workspace vector index from the snapshot. The warmup
+	// loop above ran with vector building skipped (SetSkipVectorBuild),
+	// so the search backend is text-only at this point; ImportVectorIndex
+	// wraps it into a HybridBackend with the cached vectors. This is the
+	// step that lets a default-on daemon avoid re-embedding the whole
+	// graph on every restart. SetSkipVectorBuild(false) afterwards means
+	// any later file-change re-index rebuilds vectors normally.
+	if vec := state.snapshotVector; len(vec.Index) > 0 {
+		phaseStart = time.Now()
+		if err := state.multiIndexer.ImportVectorIndex(vec.Index, vec.Dims, vec.Count); err != nil {
+			logger.Warn("daemon: vector index restore failed — semantic search will rebuild on next index",
+				zap.Error(err))
+		} else {
+			logger.Info("daemon: restored vector index from snapshot",
+				zap.Int("vectors", vec.Count),
+				zap.Int("dims", vec.Dims),
+				zap.Duration("elapsed", time.Since(phaseStart)))
+		}
+		state.multiIndexer.SetSkipVectorBuild(false)
+	}
+
 	watchCfgs := make(map[string]config.WatchConfig)
 	for prefix := range state.multiIndexer.AllMetadata() {
 		watchCfgs[prefix] = state.configManager.GetRepoConfig(prefix).Watch
@@ -907,4 +940,18 @@ func collectSnapshotContracts(mi *indexer.MultiIndexer) []snapshotContract {
 		}
 	}
 	return out
+}
+
+// collectSnapshotVector serializes the workspace-global semantic-search
+// vector index for the snapshot. The daemon's search backend is shared
+// across every tracked repo, so there is exactly one vector index;
+// MultiIndexer.ExportVectorIndex returns an empty blob when embeddings
+// are disabled or no vectors were built, in which case the snapshot
+// simply carries no vector data and the next warmup re-embeds.
+func collectSnapshotVector(mi *indexer.MultiIndexer) snapshotVector {
+	if mi == nil {
+		return snapshotVector{}
+	}
+	data, dims, count := mi.ExportVectorIndex()
+	return snapshotVector{Index: data, Dims: dims, Count: count}
 }

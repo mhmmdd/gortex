@@ -353,7 +353,12 @@ type Config struct {
 	Watch  WatchConfig  `mapstructure:"watch"    yaml:"watch,omitempty"`
 	Query  QueryConfig  `mapstructure:"query"    yaml:"query,omitempty"`
 	Search SearchConfig `mapstructure:"search"   yaml:"search,omitempty"`
-	MCP    MCPConfig    `mapstructure:"mcp"      yaml:"mcp,omitempty"`
+	// Embedding configures the semantic-search vector channel: the
+	// embedding provider plus the chunking / concurrency knobs the
+	// indexer uses to build the vector index. The vector channel is
+	// on by default with the zero-download static GloVe provider.
+	Embedding EmbeddingConfig `mapstructure:"embedding" yaml:"embedding,omitempty"`
+	MCP       MCPConfig       `mapstructure:"mcp"      yaml:"mcp,omitempty"`
 	Guards GuardsConfig `mapstructure:"guards"   yaml:"guards,omitempty"`
 	// Architecture is the declarative layer / allow-deny DSL. Empty
 	// by default; the flat Guards list above keeps working when it is
@@ -798,6 +803,84 @@ type SearchConfig struct {
 	// bm25, semantic, fan_in, fan_out, churn, community, minhash,
 	// api_signature, type_signature, recency, feedback.
 	Weights map[string]float64 `mapstructure:"weights" yaml:"weights,omitempty"`
+}
+
+// EmbeddingConfig controls the semantic-search vector channel: which
+// embedding provider builds the per-symbol vectors, and the chunking /
+// concurrency knobs the indexer uses while building the vector index.
+//
+// Semantic search is a *fusion signal* layered alongside BM25 — the
+// HybridBackend down-weights the vector channel for identifier-shaped
+// queries — never a replacement for text search. The default provider
+// is `static` (baked GloVe word vectors): it needs zero download and
+// is CPU-only, so semantic search is on by default at no setup cost.
+type EmbeddingConfig struct {
+	// Enabled is tri-state. A nil pointer means "not configured" —
+	// the caller falls back to the default (semantic search ON with
+	// the static provider). An explicit `embedding.enabled: false`
+	// turns the vector channel off; `true` forces it on. Pointer so
+	// the loader can tell "absent" from "explicitly false", mirroring
+	// RespectGitignore.
+	Enabled *bool `mapstructure:"enabled" yaml:"enabled,omitempty"`
+
+	// Provider selects the embedding backend: `static` (baked GloVe,
+	// the default), `local` (best available transformer — Hugot
+	// MiniLM, auto-downloads ~87 MB on first use), or `api` (an
+	// external Ollama / OpenAI-compatible embedding endpoint). An
+	// empty value is treated as `static`.
+	Provider string `mapstructure:"provider" yaml:"provider,omitempty"`
+
+	// APIURL is the embedding endpoint base URL, used only when
+	// Provider is `api`. Ollama vs OpenAI wire format is auto-detected
+	// from the URL.
+	APIURL string `mapstructure:"api_url" yaml:"api_url,omitempty"`
+
+	// APIModel is the model name passed to the `api` provider. Empty
+	// lets the provider pick its format-appropriate default
+	// (nomic-embed-text for Ollama, text-embedding-3-small for OpenAI).
+	APIModel string `mapstructure:"api_model" yaml:"api_model,omitempty"`
+
+	// MaxSymbols overrides the indexer's hard cap on how many symbols
+	// are embedded into the vector index. Zero keeps the built-in
+	// default. Above the cap the vector channel is skipped and BM25
+	// alone serves search — an OOM during index is worse than a
+	// missing semantic boost.
+	MaxSymbols int `mapstructure:"max_symbols" yaml:"max_symbols,omitempty"`
+
+	// ChunkThresholdLines is the source-span line count above which a
+	// symbol is split into AST windows before embedding instead of
+	// being embedded as a single metadata-only vector. Zero keeps the
+	// built-in default (~60).
+	ChunkThresholdLines int `mapstructure:"chunk_threshold_lines" yaml:"chunk_threshold_lines,omitempty"`
+
+	// ChunkWindowLines caps the line span of each AST window emitted
+	// by the sub-chunker. Zero keeps the built-in default (~40).
+	ChunkWindowLines int `mapstructure:"chunk_window_lines" yaml:"chunk_window_lines,omitempty"`
+
+	// APIConcurrency bounds how many embedding requests the indexer
+	// issues in parallel against an `api` provider. Zero keeps the
+	// built-in default (4). Only the `api` provider runs concurrently —
+	// in-process transformer backends serialize on an inference mutex,
+	// so the pool would give them no speedup.
+	APIConcurrency int `mapstructure:"api_concurrency" yaml:"api_concurrency,omitempty"`
+}
+
+// EmbeddingEnabledOrDefault resolves the tri-state Enabled flag against
+// the default-on policy: an unset flag means semantic search is ON.
+func (e EmbeddingConfig) EmbeddingEnabledOrDefault() bool {
+	if e.Enabled == nil {
+		return true
+	}
+	return *e.Enabled
+}
+
+// EmbeddingProviderOrDefault returns the configured provider name,
+// falling back to `static` (the zero-download default) when unset.
+func (e EmbeddingConfig) EmbeddingProviderOrDefault() string {
+	if e.Provider == "" {
+		return "static"
+	}
+	return e.Provider
 }
 
 type MCPConfig struct {

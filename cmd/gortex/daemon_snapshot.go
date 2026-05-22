@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/gob"
 	"errors"
@@ -71,6 +72,11 @@ type snapshotLoadResult struct {
 	Partial   bool
 	Repos     map[string]*snapshotRepo
 	Contracts map[string][]contracts.Contract
+	// Vector carries the workspace-global vector-search index restored
+	// from the snapshot. Index is nil when the snapshot predates schema
+	// v3 or embeddings were disabled when it was written. Warmup uses
+	// it to skip re-embedding the whole graph on restart.
+	Vector snapshotVector
 }
 
 // isStaleAbsPathID reports whether a node ID begins with an absolute
@@ -117,12 +123,44 @@ type snapshotHeader struct {
 	// treats as "re-extract on next stale file" — identical to the
 	// pre-contracts-persistence behaviour.
 	ContractCount int
+
+	// VectorIndex is the serialized HNSW semantic-search vector index
+	// for the whole workspace. The daemon's search backend is shared
+	// across every tracked repo, so there is one global vector index,
+	// not one per repo — it is carried on the header rather than on
+	// snapshotRepo. Nil when embeddings are disabled or no vectors were
+	// built. Persisting it lets a default-on daemon skip re-embedding
+	// the entire graph on every restart (re-embedding 30k+ symbols
+	// otherwise dominates warmup). Added in schema v3.
+	VectorIndex []byte
+	// VectorDims is the embedding dimensionality of VectorIndex (0 when
+	// no vector index is present).
+	VectorDims int
+	// VectorCount is the number of vectors in VectorIndex.
+	VectorCount int
+}
+
+// snapshotVector bundles the workspace-global vector-search index for
+// threading through saveSnapshotTo / loadSnapshotFrom. Kept as a small
+// struct (rather than three loose parameters) so the save/load
+// signatures stay readable as the snapshot grows.
+type snapshotVector struct {
+	// Index is the serialized HNSW vector index. Nil disables vector
+	// persistence for this snapshot.
+	Index []byte
+	// Dims is the embedding dimensionality; Count is the vector count.
+	Dims  int
+	Count int
 }
 
 // snapshotSchemaVersion is bumped whenever daemonSnapshot's shape or
 // semantics change in a way that older snapshots can no longer be
 // interpreted. v2 introduced the streaming layout (header + per-item
-// records); v1 was a single gob struct holding the whole graph.
+// records); v1 was a single gob struct holding the whole graph. v3
+// added the workspace-global vector-search index fields to
+// snapshotHeader — purely additive (gob decodes a v2 header with the
+// new fields zero), so the v2→v3 migration is a verbatim stream copy
+// that exists only to keep canMigrate from discarding v2 snapshots.
 //
 // ──────────────────────────── Wire contract ─────────────────────────────
 // graph.Node, graph.Edge, snapshotHeader, and snapshotRepo are wire
@@ -145,7 +183,7 @@ type snapshotHeader struct {
 // We explicitly chose graceful degradation + additive discipline over
 // a heavy migration framework that would ossify these structs
 // prematurely.
-const snapshotSchemaVersion = 2
+const snapshotSchemaVersion = 3
 
 // snapshotMigration runs when an on-disk snapshot is at a lower
 // schema version than the daemon. It reads the old-format gob stream
@@ -160,14 +198,75 @@ type snapshotMigration func(in io.Reader, out io.Writer) error
 // the source schema version: migrations[N] turns an N-format snapshot
 // into (N+1)-format. Absence of a migration for some version in the
 // gap → fall through to rebuild (current behaviour unchanged).
-//
-// Intentionally empty. Phase 1's graceful per-record decode plus the
-// additive-field discipline above handles ~90% of upgrades without a
-// migration. The first entry lands the day a real breaking change
-// ships; until then the map existing is just scaffolding so the
-// migration call site doesn't have to be invented under deadline
-// pressure later.
-var snapshotMigrations = map[int]snapshotMigration{}
+var snapshotMigrations = map[int]snapshotMigration{
+	// v2 → v3: schema v3 only adds zero-valued vector-index fields to
+	// snapshotHeader, which gob already decodes as zero from a v2
+	// stream. The migration therefore re-stamps the header's
+	// SchemaVersion to 3 and copies the node/edge/repo/contract
+	// records through byte-for-byte — no record reshaping needed.
+	2: migrateSnapshotV2toV3,
+}
+
+// migrateSnapshotV2toV3 rewrites a v2 snapshot stream as v3. Both
+// `in` and `out` are the raw (already gunzipped) gob streams. The
+// record shapes (graph.Node, graph.Edge, snapshotRepo,
+// snapshotContract) are identical across the two versions — only the
+// header gained additive fields — so the migration decodes every
+// record with the current types and re-encodes it through a fresh
+// encoder, with the header's SchemaVersion bumped to 3. A full
+// decode/re-encode (rather than a raw byte copy of the tail) keeps the
+// gob type-id table internally consistent regardless of how the v2
+// writer interleaved type definitions.
+func migrateSnapshotV2toV3(in io.Reader, out io.Writer) error {
+	dec := gob.NewDecoder(in)
+	enc := gob.NewEncoder(out)
+
+	var header snapshotHeader
+	if err := dec.Decode(&header); err != nil {
+		return fmt.Errorf("migrate v2→v3: decode header: %w", err)
+	}
+	header.SchemaVersion = 3
+	if err := enc.Encode(header); err != nil {
+		return fmt.Errorf("migrate v2→v3: encode header: %w", err)
+	}
+	for i := 0; i < header.NodeCount; i++ {
+		var n graph.Node
+		if err := dec.Decode(&n); err != nil {
+			return fmt.Errorf("migrate v2→v3: decode node %d: %w", i, err)
+		}
+		if err := enc.Encode(n); err != nil {
+			return fmt.Errorf("migrate v2→v3: encode node %d: %w", i, err)
+		}
+	}
+	for i := 0; i < header.EdgeCount; i++ {
+		var e graph.Edge
+		if err := dec.Decode(&e); err != nil {
+			return fmt.Errorf("migrate v2→v3: decode edge %d: %w", i, err)
+		}
+		if err := enc.Encode(e); err != nil {
+			return fmt.Errorf("migrate v2→v3: encode edge %d: %w", i, err)
+		}
+	}
+	for i := 0; i < header.RepoCount; i++ {
+		var r snapshotRepo
+		if err := dec.Decode(&r); err != nil {
+			return fmt.Errorf("migrate v2→v3: decode repo %d: %w", i, err)
+		}
+		if err := enc.Encode(r); err != nil {
+			return fmt.Errorf("migrate v2→v3: encode repo %d: %w", i, err)
+		}
+	}
+	for i := 0; i < header.ContractCount; i++ {
+		var c snapshotContract
+		if err := dec.Decode(&c); err != nil {
+			return fmt.Errorf("migrate v2→v3: decode contract %d: %w", i, err)
+		}
+		if err := enc.Encode(c); err != nil {
+			return fmt.Errorf("migrate v2→v3: encode contract %d: %w", i, err)
+		}
+	}
+	return nil
+}
 
 // canMigrate reports whether a migration chain exists that bridges
 // `from` → `to`. Used by loadSnapshot to decide between "migrate" and
@@ -186,6 +285,47 @@ func canMigrate(from, to int) bool {
 	return true
 }
 
+// migrateSnapshotFile re-reads the snapshot at `path`, decompresses
+// it, and runs every registered migration step from `fromVersion` up
+// to snapshotSchemaVersion. It returns an in-memory reader positioned
+// at the start of the fully-migrated (uncompressed) gob stream. The
+// caller (loadSnapshotFrom) has already verified canMigrate covers the
+// whole gap, so a missing step here is an internal inconsistency and
+// surfaces as an error.
+func migrateSnapshotFile(path string, fromVersion int) (io.Reader, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("reopen snapshot for migration: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, fmt.Errorf("gzip reader for migration: %w", err)
+	}
+	defer func() { _ = gz.Close() }()
+
+	// Buffer the raw uncompressed stream once, then fold each migration
+	// step over it. Each step reads its input and writes the next
+	// version's layout into a fresh buffer.
+	var cur bytes.Buffer
+	if _, err := io.Copy(&cur, gz); err != nil {
+		return nil, fmt.Errorf("read snapshot stream for migration: %w", err)
+	}
+	for v := fromVersion; v < snapshotSchemaVersion; v++ {
+		migrate, ok := snapshotMigrations[v]
+		if !ok {
+			return nil, fmt.Errorf("no migration registered for schema v%d", v)
+		}
+		var next bytes.Buffer
+		if err := migrate(&cur, &next); err != nil {
+			return nil, fmt.Errorf("migration v%d→v%d: %w", v, v+1, err)
+		}
+		cur = next
+	}
+	return &cur, nil
+}
+
 // saveSnapshot streams a gob+gzip snapshot of the graph to the daemon's
 // snapshot path. Called from the daemon's shutdown hook. Errors are
 // logged but never propagated — a failed snapshot write should never
@@ -195,8 +335,10 @@ func canMigrate(from, to int) bool {
 // can rehydrate each indexer's contracts.Registry without re-running the
 // extractors — IncrementalReindex skips extraction in steady state, so
 // without this the registries came back nil after every restart.
-func saveSnapshot(g *graph.Graph, repos []snapshotRepo, snapContracts []snapshotContract, version string, logger *zap.Logger) {
-	_ = saveSnapshotTo(g, repos, snapContracts, version, daemon.SnapshotPath(), logger)
+// The vec argument carries the workspace-global vector-search index so
+// a default-on daemon does not re-embed the whole graph on restart.
+func saveSnapshot(g *graph.Graph, repos []snapshotRepo, snapContracts []snapshotContract, vec snapshotVector, version string, logger *zap.Logger) {
+	_ = saveSnapshotTo(g, repos, snapContracts, vec, version, daemon.SnapshotPath(), logger)
 }
 
 // saveSnapshotTo writes the snapshot to an explicit path. Used by
@@ -205,7 +347,7 @@ func saveSnapshot(g *graph.Graph, repos []snapshotRepo, snapContracts []snapshot
 // caller can fail the job; the daemon's saveSnapshot wrapper still
 // swallows errors because a failed snapshot must never block clean
 // shutdown.
-func saveSnapshotTo(g *graph.Graph, repos []snapshotRepo, snapContracts []snapshotContract, version string, path string, logger *zap.Logger) error {
+func saveSnapshotTo(g *graph.Graph, repos []snapshotRepo, snapContracts []snapshotContract, vec snapshotVector, version string, path string, logger *zap.Logger) error {
 	if g == nil {
 		return errors.New("snapshot: nil graph")
 	}
@@ -237,6 +379,9 @@ func saveSnapshotTo(g *graph.Graph, repos []snapshotRepo, snapContracts []snapsh
 		EdgeCount:       len(edges),
 		RepoCount:       len(repos),
 		ContractCount:   len(snapContracts),
+		VectorIndex:     vec.Index,
+		VectorDims:      vec.Dims,
+		VectorCount:     vec.Count,
 	}
 
 	// Helper to clean up after any failure.
@@ -305,7 +450,8 @@ func saveSnapshotTo(g *graph.Graph, repos []snapshotRepo, snapContracts []snapsh
 		zap.Int("nodes", header.NodeCount),
 		zap.Int("edges", header.EdgeCount),
 		zap.Int("repos", header.RepoCount),
-		zap.Int("contracts", header.ContractCount))
+		zap.Int("contracts", header.ContractCount),
+		zap.Int("vectors", header.VectorCount))
 	return nil
 }
 
@@ -479,18 +625,34 @@ func loadSnapshotFrom(g *graph.Graph, path string, logger *zap.Logger) (snapshot
 		return result, fmt.Errorf("decode snapshot header: %w", err)
 	}
 	if header.SchemaVersion != snapshotSchemaVersion {
-		// Schema gap — try the migration chain. Empty registry
-		// falls through to "ignoring" with the same logging the old
-		// code emitted, so no behaviour change for v2 users today.
+		// Schema gap — try the migration chain. When a chain exists,
+		// re-read the file from scratch, run every migration step up to
+		// the current version, and decode the migrated stream;
+		// otherwise the snapshot is discarded (treated as absent) so we
+		// never interpret bytes we can't be sure of.
 		if canMigrate(header.SchemaVersion, snapshotSchemaVersion) {
-			logger.Info("snapshot: schema migration available but not yet wired up",
+			migrated, err := migrateSnapshotFile(path, header.SchemaVersion)
+			if err != nil {
+				logger.Warn("snapshot: schema migration failed, ignoring",
+					zap.Int("on_disk", header.SchemaVersion),
+					zap.Int("expected", snapshotSchemaVersion),
+					zap.Error(err))
+				return result, nil
+			}
+			logger.Info("snapshot: migrated to current schema",
+				zap.Int("from", header.SchemaVersion),
+				zap.Int("to", snapshotSchemaVersion))
+			dec = gob.NewDecoder(migrated)
+			if err := dec.Decode(&header); err != nil {
+				logger.Warn("snapshot: decode migrated header failed, ignoring", zap.Error(err))
+				return result, nil
+			}
+		} else {
+			logger.Info("snapshot: schema mismatch, ignoring",
 				zap.Int("on_disk", header.SchemaVersion),
 				zap.Int("expected", snapshotSchemaVersion))
+			return result, nil
 		}
-		logger.Info("snapshot: schema mismatch, ignoring",
-			zap.Int("on_disk", header.SchemaVersion),
-			zap.Int("expected", snapshotSchemaVersion))
-		return result, nil
 	}
 
 	// Binary-version gate. The snapshot persists already-resolved edges
@@ -537,6 +699,16 @@ func loadSnapshotFrom(g *graph.Graph, path string, logger *zap.Logger) (snapshot
 			zap.Int64("snapshot_binary_mtime", header.BinaryMtimeUnix),
 			zap.Int64("running_binary_mtime", mt))
 		return result, nil
+	}
+
+	// Carry the workspace-global vector index off the header. It is
+	// present only for schema-v3+ snapshots written with embeddings
+	// enabled; warmup decides whether to restore it (an embedder must
+	// be configured and its dims must match).
+	result.Vector = snapshotVector{
+		Index: header.VectorIndex,
+		Dims:  header.VectorDims,
+		Count: header.VectorCount,
 	}
 
 	// Snapshots can carry stale nodes whose IDs begin with an absolute

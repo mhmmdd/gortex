@@ -160,6 +160,15 @@ type Indexer struct {
 	// embedder is the optional embedding provider for semantic search.
 	embedder embedding.Provider
 
+	// skipVectorBuild, when true, makes buildSearchIndex populate only
+	// the text index and never run the embedding pass — even with an
+	// embedder set. The daemon flips it on for the warmup re-index loop
+	// when a snapshot already carries the workspace vector index, so
+	// the graph is not re-embedded only to have the cached index
+	// overwrite it. Off by default; a normal index always builds
+	// vectors when an embedder is present.
+	skipVectorBuild bool
+
 	// semanticMgr is the optional semantic enrichment manager.
 	semanticMgr *semantic.Manager
 
@@ -730,6 +739,13 @@ func (idx *Indexer) ProjectID() string { return idx.projectID }
 // SetEmbedder sets the embedding provider for semantic search.
 // When set, buildSearchIndex will create a HybridBackend with vector search.
 func (idx *Indexer) SetEmbedder(p embedding.Provider) { idx.embedder = p }
+
+// SetSkipVectorBuild toggles the embedding pass in buildSearchIndex.
+// When true, buildSearchIndex builds only the text index — used by the
+// daemon warmup path when a snapshot already carries the workspace
+// vector index, so the graph is not needlessly re-embedded. When false
+// (the default) an indexer with an embedder set always builds vectors.
+func (idx *Indexer) SetSkipVectorBuild(skip bool) { idx.skipVectorBuild = skip }
 
 // SetSemanticManager sets the semantic enrichment manager.
 // When set, the indexer runs semantic enrichment after resolution.
@@ -2255,6 +2271,15 @@ func (idx *Indexer) buildSearchIndex() {
 
 	// Build vector index if embedder is available.
 	if idx.embedder == nil {
+		return
+	}
+
+	// skipVectorBuild short-circuits the embedding pass: the text index
+	// above is fully populated, but a caller (the daemon warmup loop
+	// after a snapshot restore) has signalled that the workspace vector
+	// index will be supplied separately, so re-embedding here would be
+	// wasted work immediately overwritten by the cached index.
+	if idx.skipVectorBuild {
 		return
 	}
 

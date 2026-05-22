@@ -51,6 +51,49 @@ func NewHugotProviderWithVariant(variant string) (Provider, error) {
 	return newHugotProviderWithSpec(v)
 }
 
+// ProviderConfig is the subset of an embedding configuration that
+// NewProviderFromConfig needs. It is a local struct — not the
+// config.EmbeddingConfig type — so the embedding package stays free of
+// an import dependency on internal/config. Callers translate their
+// config block into this shape.
+type ProviderConfig struct {
+	// Provider selects the backend: "static" (baked GloVe, the
+	// default), "local" (best available transformer), or "api" (an
+	// external embedding endpoint). Empty is treated as "static".
+	Provider string
+	// APIURL / APIModel parameterise the "api" provider.
+	APIURL   string
+	APIModel string
+}
+
+// NewProviderFromConfig constructs an embedding provider from a
+// configuration block. The selection logic:
+//
+//   - "static" (or empty)  → NewStaticProvider — baked GloVe word
+//     vectors, zero download, CPU-only. This is the default because
+//     it makes semantic search work with no setup.
+//   - "local"              → NewLocalProvider — the best available
+//     transformer backend (Hugot MiniLM auto-downloads on first use).
+//   - "api"                → NewAPIProvider against cfg.APIURL.
+//
+// An unknown provider name is an error so a typo in `.gortex.yaml`
+// fails loudly instead of silently degrading.
+func NewProviderFromConfig(cfg ProviderConfig) (Provider, error) {
+	switch cfg.Provider {
+	case "", "static":
+		return NewStaticProvider()
+	case "local":
+		return NewLocalProvider()
+	case "api":
+		if cfg.APIURL == "" {
+			return nil, fmt.Errorf("embedding provider %q requires an api_url", cfg.Provider)
+		}
+		return NewAPIProvider(cfg.APIURL, cfg.APIModel), nil
+	default:
+		return nil, fmt.Errorf("unknown embedding provider %q (want static, local, or api)", cfg.Provider)
+	}
+}
+
 // NewLocalProvider returns the best available local embedding provider.
 // Preference order: ONNX (fastest, requires libonnxruntime) → GoMLX (XLA) →
 // Hugot (pure Go, always compiled in) → Static (GloVe word vectors fallback).

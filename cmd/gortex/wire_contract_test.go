@@ -147,11 +147,13 @@ func wireContractGolden(name string) string {
 		// and the enrich passes restamp it on next response.
 		return "954c994407f745b921ace19ab999d620f2e1aa071d177722a176f635ae7746dc"
 	case "snapshotHeader":
-		// Bumped when BinaryMtimeUnix was added (additive — gob decodes
-		// unknown fields as zero; older snapshots load with BinaryMtimeUnix=0,
-		// which loadSnapshot treats as "legacy, discard once" to force a
-		// fresh resolve on the next warmup).
-		return "1dfcacfade7ba543c376ded4b86e289757841186a2971a5e6ef083bf6fc01147"
+		// Bumped when the VectorIndex / VectorDims / VectorCount fields
+		// were added (additive — gob decodes unknown fields as zero).
+		// This change shipped alongside snapshotSchemaVersion v3 and a
+		// v2→v3 migration so deployed daemons keep their v2 snapshots
+		// across the upgrade instead of paying a full re-index.
+		// Previously bumped when BinaryMtimeUnix was added.
+		return "a0f604616d04c757ffec4d084fc53cf6c3db03c8add1a8af0f32f902c1b1fe92"
 	case "snapshotRepo":
 		return "8a78544c6e8d6c384f95b971df43408e7bc5f5ab4c7f2052d038bd3ffa4e1311"
 	case "snapshotContract":

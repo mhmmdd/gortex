@@ -147,7 +147,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		// per-workspace snapshots that the per-workspace gortex server
 		// later loads at boot.
 		if indexSnapshot != "" {
-			if err := saveSnapshotTo(g, nil, nil, "gortex-index", indexSnapshot, logger); err != nil {
+			if err := saveSnapshotTo(g, nil, nil, snapshotVector{}, "gortex-index", indexSnapshot, logger); err != nil {
 				return fmt.Errorf("write snapshot %s: %w", indexSnapshot, err)
 			}
 		}

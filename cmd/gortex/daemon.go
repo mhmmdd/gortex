@@ -24,13 +24,19 @@ import (
 )
 
 var (
-	daemonDetach         bool
-	daemonTail           int
-	daemonEmbeddings     bool
-	daemonStatusWatch    bool
-	daemonStatusInterval time.Duration
-	daemonHTTPAddr       string
-	daemonHTTPAuthToken  string
+	daemonDetach bool
+	daemonTail   int
+	daemonEmbeddings bool
+	// daemonEmbeddingsChanged records whether `--embeddings` was given
+	// explicitly on `gortex daemon start`. buildDaemonState reads it
+	// (the function has no *cobra.Command of its own) to decide whether
+	// the flag overrides the `embedding:` config block. Set once in
+	// runDaemonStart before buildDaemonState runs.
+	daemonEmbeddingsChanged bool
+	daemonStatusWatch       bool
+	daemonStatusInterval    time.Duration
+	daemonHTTPAddr          string
+	daemonHTTPAuthToken     string
 )
 
 var daemonCmd = &cobra.Command{
@@ -133,6 +139,12 @@ func runDaemonStart(cmd *cobra.Command, _ []string) error {
 
 	srv := daemon.New(daemon.SocketPath(), canonicalVersion(), logger)
 
+	// Record whether `--embeddings` was set explicitly so
+	// buildDaemonState can let it override the `embedding:` config
+	// block. With `--detach` the re-exec'd child sees no flags, so an
+	// explicit opt-in there must travel via GORTEX_EMBEDDINGS instead.
+	daemonEmbeddingsChanged = cmd.Flags().Changed("embeddings")
+
 	// Fast path: snapshot load + indexer + MCP server wiring. The
 	// per-repo TrackRepoCtx loop and MultiWatcher init are deferred to
 	// warmupDaemonState below so the socket opens immediately instead
@@ -160,7 +172,7 @@ func runDaemonStart(cmd *cobra.Command, _ []string) error {
 		if mw != nil {
 			_ = mw.Stop()
 		}
-		saveSnapshot(state.graph, collectSnapshotRepos(state.multiIndexer), collectSnapshotContracts(state.multiIndexer), version, logger)
+		saveSnapshot(state.graph, collectSnapshotRepos(state.multiIndexer), collectSnapshotContracts(state.multiIndexer), collectSnapshotVector(state.multiIndexer), version, logger)
 		if state.mcpServer != nil {
 			_ = state.mcpServer.FlushSavings()
 		}
@@ -442,7 +454,7 @@ func startPeriodicSnapshots(g *graph.Graph, mi *indexer.MultiIndexer, version st
 					logger.Debug("snapshot: skipped tick — daemon still warming up")
 					continue
 				}
-				saveSnapshot(g, collectSnapshotRepos(mi), collectSnapshotContracts(mi), version, logger)
+				saveSnapshot(g, collectSnapshotRepos(mi), collectSnapshotContracts(mi), collectSnapshotVector(mi), version, logger)
 			case <-stop:
 				return
 			}

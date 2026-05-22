@@ -16,7 +16,6 @@ import (
 	"github.com/zzet/gortex/internal/config"
 	"github.com/zzet/gortex/internal/contracts"
 	"github.com/zzet/gortex/internal/daemon"
-	"github.com/zzet/gortex/internal/embedding"
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/indexer"
 	gortexmcp "github.com/zzet/gortex/internal/mcp"
@@ -100,7 +99,7 @@ func init() {
 	rootCmd.AddCommand(serverCmd)
 }
 
-func runServer(_ *cobra.Command, _ []string) error {
+func runServer(cmd *cobra.Command, _ []string) error {
 	logger := newLogger()
 	defer func() { _ = logger.Sync() }()
 
@@ -162,18 +161,18 @@ func runServer(_ *cobra.Command, _ []string) error {
 	// Set up embedding provider for semantic search. Kept local so it
 	// can be handed off to MultiIndexer below; otherwise per-repo
 	// indexers built inside TrackRepoCtx have embedder=nil.
-	var embedder embedding.Provider
-	if serverEmbeddingsURL != "" {
-		embedder = embedding.NewAPIProvider(serverEmbeddingsURL, serverEmbeddingsModel)
-		fmt.Fprintf(os.Stderr, "[gortex] server: semantic search enabled (API: %s)\n", serverEmbeddingsURL)
-	} else if serverEmbeddings {
-		e, err := embedding.NewLocalProvider()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[gortex] server: embeddings disabled: %v\n", err)
-		} else {
-			embedder = e
-			fmt.Fprintf(os.Stderr, "[gortex] server: semantic search enabled (local)\n")
-		}
+	// resolveEmbedder applies explicit flag/env > `embedding:` config >
+	// default-on static, so a stock server gets semantic search.
+	embedder, embDesc, embErr := resolveEmbedder(embedderRequest{
+		flagChanged: cmd.Flags().Changed("embeddings"),
+		flagEnabled: serverEmbeddings,
+		flagURL:     serverEmbeddingsURL,
+		flagModel:   serverEmbeddingsModel,
+	}, cfg)
+	if embErr != nil {
+		fmt.Fprintf(os.Stderr, "[gortex] server: embeddings disabled: %v\n", embErr)
+	} else if embedder != nil {
+		fmt.Fprintf(os.Stderr, "[gortex] server: semantic search enabled (%s)\n", embDesc)
 	}
 	if embedder != nil {
 		idx.SetEmbedder(embedder)
