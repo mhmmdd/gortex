@@ -20,6 +20,11 @@ import (
 // developer's real ~/.config/gortex/config.yaml. The function must
 // re-resolve HOME on every call.
 func TestDefaultGlobalConfigPath_HonorsHomeChange(t *testing.T) {
+	// Pin XDG_CONFIG_HOME empty: when it is set in the ambient
+	// environment (the GitHub ubuntu runner sets it), an absolute value
+	// wins over $HOME/.config by design and would mask the HOME change
+	// this test asserts.
+	t.Setenv("XDG_CONFIG_HOME", "")
 	homeA := t.TempDir()
 	t.Setenv("HOME", homeA)
 	gotA := DefaultGlobalConfigPath()
