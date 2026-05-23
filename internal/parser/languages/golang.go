@@ -1,6 +1,7 @@
 package languages
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -2181,49 +2182,57 @@ func findMethodReturnType(receiverType, methodName string, result *parser.Extrac
 // comments and stamps them onto the node's Meta. Lets callers flag
 // special Go entry points (cgo exports, linkname) so dead-code
 // detection doesn't mark them as dead.
+//
+// Allocation contract: scans backwards using bytes.LastIndexByte
+// against the original src — no per-call lineStarts slice, no per-
+// line string copy until a pragma actually matches. The predecessor
+// implementation built an O(startLine) []int of line offsets per
+// call, which on a Go monorepo like k8s (12 k+ .go files, hundreds
+// of symbols each) was the single biggest allocation in the
+// indexer (4.57 GB / 14 % of total).
 func scanGoPragmas(src []byte, startLine int, node *graph.Node) {
-	// startLine is 0-based here (matches tree-sitter's row numbering at
-	// the call site).
-	if startLine <= 0 {
+	// startLine is 0-based (matches tree-sitter's row numbering at the
+	// call site). One forward scan locates the '\n' that ends row
+	// startLine − 1, and the backward walk from there is bounded at 5
+	// iterations regardless of file size.
+	if startLine <= 0 || len(src) == 0 {
 		return
 	}
-	// Build a list of line-start byte offsets up to startLine.
-	var lineStarts []int
-	lineStarts = append(lineStarts, 0)
-	lineNum := 1
-	for i := 0; i < len(src) && lineNum <= startLine; i++ {
-		if src[i] != '\n' {
-			continue
+	end := -1
+	{
+		row := 0
+		for i := 0; i < len(src); i++ {
+			if src[i] != '\n' {
+				continue
+			}
+			row++
+			end = i
+			if row == startLine {
+				break
+			}
 		}
-		if i == 0 || src[i-1] == '\n' {
-			lineStarts = append(lineStarts, i)
-			lineNum++
-		}
-		lineStarts = append(lineStarts, i+1)
-		lineNum++
 	}
-
-	for scanLine := startLine - 1; scanLine >= 0 && scanLine >= startLine-5; scanLine-- {
-		if scanLine >= len(lineStarts) {
-			continue
+	if end < 0 {
+		return
+	}
+	for scanned := 0; scanned < 5 && end >= 0; scanned++ {
+		prev := bytes.LastIndexByte(src[:end], '\n')
+		line := bytes.TrimSpace(src[prev+1 : end])
+		if len(line) != 0 && !bytes.HasPrefix(line, []byte("//")) {
+			return
 		}
-		start := lineStarts[scanLine]
-		end := len(src)
-		if scanLine+1 < len(lineStarts) {
-			end = lineStarts[scanLine+1]
-		}
-		line := strings.TrimSpace(string(src[start:end]))
-		if line != "" && !strings.HasPrefix(line, "//") {
-			break
-		}
-		if strings.HasPrefix(line, "//export ") {
+		if bytes.HasPrefix(line, []byte("//export ")) {
 			node.Meta["cgo_export"] = true
 			return
 		}
-		if strings.HasPrefix(line, "//go:linkname ") {
+		if bytes.HasPrefix(line, []byte("//go:linkname ")) {
 			node.Meta["go_linkname"] = true
 			return
 		}
+		if prev < 0 {
+			return
+		}
+		end = prev
 	}
 }
 
