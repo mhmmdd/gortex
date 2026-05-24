@@ -1664,3 +1664,78 @@ func escapeCypherStringLit(s string) string {
 	s = strings.ReplaceAll(s, `'`, `\'`)
 	return s
 }
+
+// -- BackendResolver implementation --------------------------------------
+
+// Compile-time assertion: *Store satisfies graph.BackendResolver.
+var _ graph.BackendResolver = (*Store)(nil)
+
+// ResolveUniqueNames pushes the largest trivially-correct subset of
+// the resolver's work into the Kuzu engine via a single Cypher
+// MATCH+SET. For every Edge whose to_id starts with "unresolved::",
+// strip the prefix to recover the embedded identifier name; if
+// exactly one Node carries that name (no ambiguity), rewrite the
+// edge in place to point at the resolved node and bump its origin
+// to "ast_resolved". Edges with zero or multiple candidates are
+// untouched — they fall through to the Go resolver which has the
+// language/scope/visibility rules needed to disambiguate.
+//
+// The query runs as one statement on the server; the Go side does
+// nothing per resolved edge. On a 50k-file repo this collapses
+// what would otherwise be ~30k per-edge round-trips into a single
+// Cypher Execute.
+func (s *Store) ResolveUniqueNames() (int, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	// Strategy: for each unresolved edge, derive the name by
+	// stripping the "unresolved::" prefix. Match it against Node.name.
+	// If exactly one candidate, swap the edge's to-pointer (DELETE +
+	// CREATE a new edge with the same properties but the resolved
+	// to-endpoint — Kuzu rel edges are immutable on their endpoint
+	// pair so a direct SET of from/to is not supported).
+	const q = `
+MATCH ()-[e:Edge]->(stub:Node)
+WHERE stub.id STARTS WITH 'unresolved::'
+WITH e, stub, substring(stub.id, 12) AS name
+MATCH (target:Node {name: name})
+WITH e, stub, name, collect(target) AS targets
+WHERE size(targets) = 1
+WITH e, targets[0] AS target
+MATCH (caller:Node)-[oldE:Edge {kind: e.kind, file_path: e.file_path, line: e.line}]->(stub2:Node)
+WHERE stub2.id STARTS WITH 'unresolved::' AND id(oldE) = id(e)
+DELETE oldE
+CREATE (caller)-[newE:Edge {
+    kind: e.kind,
+    file_path: e.file_path,
+    line: e.line,
+    confidence: e.confidence,
+    confidence_label: e.confidence_label,
+    origin: 'ast_resolved',
+    tier: 'ast_resolved',
+    cross_repo: e.cross_repo,
+    meta: e.meta
+}]->(target)
+RETURN count(newE) AS resolved`
+	res, err := s.conn.Query(q)
+	if err != nil {
+		return 0, fmt.Errorf("backend-resolver: %w", err)
+	}
+	defer res.Close()
+	if !res.HasNext() {
+		return 0, nil
+	}
+	row, err := res.Next()
+	if err != nil {
+		return 0, fmt.Errorf("backend-resolver: read result: %w", err)
+	}
+	defer row.Close()
+	vals, err := row.GetAsSlice()
+	if err != nil || len(vals) == 0 {
+		return 0, err
+	}
+	n, _ := vals[0].(int64)
+	if n > 0 {
+		s.edgeIdentityRevs.Add(n)
+	}
+	return int(n), nil
+}

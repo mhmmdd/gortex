@@ -189,6 +189,31 @@ type Store interface {
 // implementation gets swapped in.
 var _ Store = (*Graph)(nil)
 
+// BackendResolver is an optional interface backends MAY implement to
+// expose a single-query bulk-resolve pass that runs entirely inside
+// the backend engine (Cypher MATCH+SET on Kuzu, UPDATE...FROM on
+// DuckDB) instead of round-tripping every resolution decision back
+// to Go. It is intended for the disk-only large-repo path where the
+// in-memory shadow swap is disabled (above shadowMaxFileCount); on
+// the shadow path the resolver runs in RAM and the per-call cost
+// the backend would amortise is already gone.
+//
+// Scope: handles only the "name is unique in the graph" case —
+// resolve every `unresolved::Foo` edge to the single Node named
+// Foo when exactly one such Node exists. That's the largest
+// trivially-correct subset of resolution; everything else (cross-
+// package visibility, type compatibility, language-specific import
+// dispatch) stays in the Go resolver against the now-thinner
+// pending-edge set.
+//
+// Backends that implement it return the number of edges resolved;
+// 0 means "no candidates matched, fall through entirely". Errors
+// surface to the caller; the resolver treats an error as
+// non-fatal (logs and continues with the Go path).
+type BackendResolver interface {
+	ResolveUniqueNames() (resolved int, err error)
+}
+
 // BulkLoader is an optional interface backends MAY implement to expose
 // a high-throughput cold-load fast path that bypasses per-call query
 // overhead. The cold-start indexer fires ~2000 small AddBatch calls

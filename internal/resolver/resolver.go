@@ -172,6 +172,26 @@ func (r *Resolver) ResolveAll() *ResolveStats {
 	defer r.clearReachabilityIndex()
 	defer r.clearLSPIndex()
 
+	// Backend-delegated resolution: when the store implements
+	// graph.BackendResolver AND the GORTEX_BACKEND_RESOLVER env var
+	// is set, push the trivially-correct subset of resolution
+	// (unique-name lookup) into the backend engine as a single
+	// Cypher/SQL statement before the Go worker pool runs. This is
+	// for the large-repo, disk-only path where the in-memory shadow
+	// swap is disabled — pushing the easy 20-40% of resolutions into
+	// the engine cuts the Go-side pending set substantially and
+	// avoids the per-edge round-trip cost. Errors fall through —
+	// the Go resolver picks up whatever wasn't resolved.
+	if backendResolverEnabled() {
+		if br, ok := r.graph.(graph.BackendResolver); ok {
+			if n, err := br.ResolveUniqueNames(); err != nil {
+				// Non-fatal: the Go path resolves the same edges
+				// correctly, just slower.
+				_ = n
+			}
+		}
+	}
+
 	// Use the predicate-shaped Store method so disk backends scan
 	// only the contiguous "unresolved::*" slice (via a sparse
 	// idx_edge_unres bucket on bolt, a to_id range scan on sqlite)

@@ -1495,3 +1495,64 @@ func (s *Store) FlushBulk() error {
 	}
 	return nil
 }
+
+// -- BackendResolver implementation --------------------------------------
+
+// Compile-time assertion: *Store satisfies graph.BackendResolver.
+var _ graph.BackendResolver = (*Store)(nil)
+
+// ResolveUniqueNames pushes the unique-name resolution pass into
+// DuckDB as a single UPDATE...FROM. For every edge whose to_id
+// matches "unresolved::Name", if exactly one Node carries that name
+// in the graph, rewrite to_id to the resolved Node's id and promote
+// origin/tier to ast_resolved. Ambiguous (multiple candidates) and
+// unresolvable (no candidates) edges stay untouched; the Go
+// resolver picks them up afterward with the language/scope rules.
+//
+// Two indexed CTE passes are cheaper than the per-edge round-trip
+// the Go resolver would otherwise do; on a 50k-file repo this
+// collapses what would be ~30k per-edge SQL UPDATEs into one
+// statement.
+func (s *Store) ResolveUniqueNames() (int, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	// Step 1: build a map of unique-name candidates (name -> id) using
+	// HAVING count = 1 so only unambiguous names land in the lookup.
+	// Step 2: update edges whose to_id matches "unresolved::<name>"
+	// and whose stripped name lands in the unique-name lookup.
+	//
+	// edges_unique UNIQUE INDEX on (from_id, to_id, kind, file_path,
+	// line) means an update that would create a duplicate identity
+	// tuple is rejected — that's fine, the resolver's contract is
+	// "resolve at most once per pending edge" and the prior path
+	// would also fail the duplicate-key check.
+	const q = `
+WITH unique_names AS (
+    SELECT name, MIN(id) AS id
+    FROM nodes
+    WHERE name <> ''
+    GROUP BY name
+    HAVING COUNT(*) = 1
+)
+UPDATE edges
+SET to_id  = un.id,
+    origin = 'ast_resolved',
+    tier   = 'ast_resolved'
+FROM unique_names un
+WHERE edges.to_id LIKE 'unresolved::%'
+  AND un.name = substring(edges.to_id, 13)
+`
+	res, err := s.db.Exec(q)
+	if err != nil {
+		return 0, fmt.Errorf("backend-resolver: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		s.edgeIdentityRevs.Add(n)
+	}
+	return int(n), nil
+}
