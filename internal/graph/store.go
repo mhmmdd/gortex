@@ -357,3 +357,75 @@ type SymbolSearcher interface {
 	BuildSymbolIndex() error
 	SearchSymbols(query string, limit int) ([]SymbolHit, error)
 }
+
+// VectorItem is the payload BulkUpsertEmbeddings takes per node:
+// the node's ID and its embedding vector. Length of Vec must
+// match the dim the corresponding BuildVectorIndex call declared
+// — backends with fixed-width vector columns (Ladybug's
+// FLOAT[N]) reject inserts that don't match.
+type VectorItem struct {
+	NodeID string
+	Vec    []float32
+}
+// VectorHit is a single ANN search result: the matched node ID
+// plus its distance to the query vector under the backend's
+// metric (cosine by default in Ladybug). LOWER distance = more
+// similar. Callers that need a similarity score in [0,1] should
+// translate via `1 - distance` for cosine.
+type VectorHit struct {
+	NodeID   string
+	Distance float64
+}
+
+// VectorSearcher is an optional interface backends MAY implement to
+// expose engine-native HNSW vector indexing over per-symbol
+// embedding vectors. When the backing store implements it, the
+// daemon's semantic-search path routes through the backend's
+// native ANN index instead of holding a parallel in-process
+// HNSW — saving roughly `dim × 4 × N` bytes of heap (≈ 1 GB for
+// 384-dim × 663k symbols on a Vscode-scale repo).
+//
+// The bigger win — and the reason Option B exists alongside
+// Option C in the storage-engine roadmap — is that vector
+// neighbours and graph traversal can be combined in a single
+// Cypher round-trip:
+//
+//	CALL QUERY_VECTOR_INDEX('SymbolVec', 'idx_emb', $vec, 50)
+//	  YIELD node AS seed
+//	MATCH (seed)<-[:calls]-(caller:KindFunction)
+//	WHERE caller.RepoPrefix = $repo AND NOT caller.id CONTAINS '_test'
+//	RETURN seed.name, caller.name
+//
+// Today this query is three round-trips on the in-process HNSW
+// path (ANN → IDs → graph fetch → Go-side filter); with
+// VectorSearcher it's one engine-vectorised pipeline.
+//
+// Contract:
+//
+//   - UpsertEmbedding is the per-call write path used by
+//     incremental reindex when one file's embeddings change.
+//
+//   - BulkUpsertEmbeddings is the cold-start fast path used by
+//     the indexer's embedding pass. Implementations SHOULD use
+//     the backend's native bulk primitive (TSV + COPY FROM on
+//     Ladybug) so a 600k-node corpus doesn't pay per-row Cypher
+//     parse cost. Idempotent on NodeID — re-running with an
+//     overlapping set replaces in place.
+//
+//   - BuildVectorIndex finalises the HNSW index after the bulk
+//     populate. The dim parameter declares the embedding
+//     width; backends with fixed-width columns lazily create
+//     the storage schema on the first BuildVectorIndex call.
+//     Idempotent — safe to call multiple times with the same dim.
+//
+//   - SimilarTo runs an ANN query: given a vector, return the k
+//     closest stored vectors ordered by ascending distance.
+//
+//   - Close is implied by graph.Store.Close — no separate
+//     teardown method here.
+type VectorSearcher interface {
+	UpsertEmbedding(nodeID string, vec []float32) error
+	BulkUpsertEmbeddings(items []VectorItem) error
+	BuildVectorIndex(dims int) error
+	SimilarTo(vec []float32, limit int) ([]VectorHit, error)
+}

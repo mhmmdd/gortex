@@ -57,6 +57,11 @@ type Store struct {
 	// whether the symbol FTS index has been built. See fts.go for
 	// the SymbolSearcher implementation.
 	fts ftsState
+
+	// vec tracks the native VECTOR extension load + the per-dim
+	// SymbolVec schema declaration + index-build sentinel. See
+	// vector.go for the VectorSearcher implementation.
+	vec vectorState
 }
 
 // Compile-time assertion: *Store satisfies graph.Store.
