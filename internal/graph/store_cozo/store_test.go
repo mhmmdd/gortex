@@ -23,3 +23,15 @@ func TestCozoStoreConformance(t *testing.T) {
 		return s
 	})
 }
+
+func TestCozoBackendResolverConformance(t *testing.T) {
+	storetest.RunBackendResolverConformance(t, func(t *testing.T) graph.Store {
+		dir := t.TempDir()
+		s, err := store_cozo.Open(filepath.Join(dir, "test.cozo"))
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	})
+}
