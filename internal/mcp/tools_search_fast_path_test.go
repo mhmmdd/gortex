@@ -25,14 +25,13 @@ import (
 // search.SymbolBundleSearcherBackend, and the VectorChannelOnly
 // duck-typed interface the engine queries on the bundle-bypass path.
 type recordingBackend struct {
-	hits             []search.SearchResult
-	nodes            map[string]*graph.Node
-	searchCalls      atomic.Int32
-	bundleCalls      atomic.Int32
-	vectorOnlyCalls  atomic.Int32
-	channelCalls     atomic.Int32
-	lastQueries      []string
-	queriesMu        atomic.Pointer[[]string]
+	hits            []search.SearchResult
+	nodes           map[string]*graph.Node
+	searchCalls     atomic.Int32
+	bundleCalls     atomic.Int32
+	vectorOnlyCalls atomic.Int32
+	channelCalls    atomic.Int32
+	queriesMu       atomic.Pointer[[]string]
 }
 
 func newRecordingBackend(nodes map[string]*graph.Node, hits []search.SearchResult) *recordingBackend {

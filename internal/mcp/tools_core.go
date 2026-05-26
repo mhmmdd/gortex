@@ -1187,6 +1187,14 @@ func (s *Server) handleSearchSymbols(ctx context.Context, req mcp.CallToolReques
 		// Slightly widen the BM25 over-fetch when we're going to
 		// rerank: more head candidates means a more useful reorder.
 		fetchLimit = offset + limit + rerankCap
+	} else if identifierFastPath {
+		// Identifier-shape fast path: no expansion, no vector channel,
+		// no LLM rerank — the only down-stream consumer is the
+		// structural rerank pipeline scoring a single FTS-ranked head.
+		// A wide head is wasted work; every extra candidate drags an
+		// in/out edge pair through the bundle phase. Tighten to
+		// +5 so the post-filter slack still leaves a full page.
+		fetchLimit = offset + limit + 5
 	}
 
 	// Expansion terms feeding the BM25 OR-merge: LLM-derived synonyms

@@ -227,9 +227,19 @@ func fetchAndMergeBM25Timed(eng *query.Engine, original string, expanded []strin
 	// Combined OR-merge: pass every expansion term — concatenated by
 	// whitespace — as ONE BM25 call. Tokenisation + IDF scoring run
 	// once across the whole bag of terms instead of N times.
+	//
+	// The concatenated bag of terms is never going to match any
+	// node's literal Name, so the engine's exact-name splice would
+	// pay a guaranteed-empty FindNodesByName Cypher round-trip every
+	// fan-out. SkipExactNameSplice tells gatherBackendCandidates to
+	// skip it — the per-fragment exact-name rescue below covers the
+	// load-bearing PascalCase-fragment case the splice was insuring
+	// against, so dropping the round-trip is safe.
 	combined := strings.Join(cleanedExpansion, " ")
+	expansionScope := scope
+	expansionScope.SkipExactNameSplice = true
 	expansionStart := time.Now()
-	extra := eng.SearchSymbolsScoped(combined, fetchLimit, scope)
+	extra := eng.SearchSymbolsScoped(combined, fetchLimit, expansionScope)
 	if timings != nil {
 		timings.BM25ExpansionMS += time.Since(expansionStart).Milliseconds()
 	}

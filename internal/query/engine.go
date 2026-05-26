@@ -722,20 +722,26 @@ func (e *Engine) gatherBackendCandidates(query string, limit int, opts QueryOpti
 	}
 
 	// Exact-name matches that BM25 might rank low — splice them in at
-	// the tail of the text channel so they're still text-ranked.
-	findNameStart := time.Now()
-	for _, n := range e.g.FindNodesByName(query) {
-		if n.Kind == graph.KindFile || n.Kind == graph.KindImport {
-			continue
+	// the tail of the text channel so they're still text-ranked. The
+	// caller can suppress this when the query string is known to never
+	// match a literal Name (the combined-OR fan-out's concatenated bag
+	// of expansion terms, for example) — saves the Cypher round-trip
+	// that would unconditionally return zero rows.
+	if !opts.SkipExactNameSplice {
+		findNameStart := time.Now()
+		for _, n := range e.g.FindNodesByName(query) {
+			if n.Kind == graph.KindFile || n.Kind == graph.KindImport {
+				continue
+			}
+			if _, seen := idx[n.ID]; seen {
+				continue
+			}
+			idx[n.ID] = len(cands)
+			cands = append(cands, &rerank.Candidate{Node: n, TextRank: len(textResults), VectorRank: -1})
 		}
-		if _, seen := idx[n.ID]; seen {
-			continue
+		if timings != nil {
+			timings.FindNameMS += time.Since(findNameStart).Milliseconds()
 		}
-		idx[n.ID] = len(cands)
-		cands = append(cands, &rerank.Candidate{Node: n, TextRank: len(textResults), VectorRank: -1})
-	}
-	if timings != nil {
-		timings.FindNameMS += time.Since(findNameStart).Milliseconds()
 	}
 
 	// Substring fallback for remaining slots — strictly TextRank=-1
