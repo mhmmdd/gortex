@@ -3,6 +3,8 @@ package store_ladybug
 import (
 	"fmt"
 	"strings"
+
+	"github.com/zzet/gortex/internal/graph"
 )
 
 // upgradeUnresolvedStubs stamps `kind='unresolved'` plus the extracted
@@ -26,7 +28,7 @@ import (
 //   - kind = 'unresolved'
 //   - name = the bare symbol name (last segment after `unresolved::`)
 //   - repo_prefix = empty for the legacy form, or the prefix for the
-//                   multi-repo form
+//     multi-repo form
 //
 // The rules below then MATCH `stub.kind = 'unresolved'` and read
 // `stub.name` directly — no substring math, no format coupling.
@@ -143,6 +145,7 @@ CREATE (caller)-[newE:Edge {
 RETURN count(newE) AS resolved`
 	return s.runResolverQueryLocked(q, "ResolveSamePackage")
 }
+
 // ResolveImportAware drains the "imported-symbol" case: caller's
 // file_path is the FROM of an EdgeImports to an imported file, and
 // a Node with the unresolved name lives in that imported file.
@@ -192,6 +195,7 @@ CREATE (caller)-[newE:Edge {
 RETURN count(newE) AS resolved`
 	return s.runResolverQueryLocked(q, "ResolveImportAware")
 }
+
 // ResolveRelativeImports drains `unresolved::pyrel::<stem>` edges
 // (Python's relative-import placeholder emitted by the parser) by
 // rewriting them to either `<stem>.py` or `<stem>/__init__.py` —
@@ -239,6 +243,7 @@ RETURN count(newE) AS resolved`
 	}
 	return total, nil
 }
+
 // ResolveCrossRepo drains unresolved edges that bind unambiguously
 // to a Node in a different repo. Only fires when the caller has a
 // non-empty repo_prefix (i.e. we're in a multi-repo workspace) and
@@ -278,6 +283,7 @@ CREATE (caller)-[newE:Edge {
 RETURN count(newE) AS resolved`
 	return s.runResolverQueryLocked(q, "ResolveCrossRepo")
 }
+
 // ResolveExternalCallStubs ensures every external::* edge target
 // has a corresponding Node row with kind='external' and promotes
 // the edge's origin to ast_resolved. Kuzu's AddEdge already
@@ -437,4 +443,76 @@ func (s *Store) ResolveAllBulk() (int, error) {
 		return total, fmt.Errorf("backend-resolver rule errors: %s", strings.Join(ruleErrs, "; "))
 	}
 	return total, nil
+}
+
+// Compile-time assertion: *Store satisfies graph.BackendResolver.
+var _ graph.BackendResolver = (*Store)(nil)
+
+// ResolveUniqueNames pushes the largest trivially-correct subset of
+// the resolver's work into the Kuzu engine via a single Cypher
+// MATCH+SET. For every Edge whose to_id starts with "unresolved::",
+// strip the prefix to recover the embedded identifier name; if
+// exactly one Node carries that name (no ambiguity), rewrite the
+// edge in place to point at the resolved node and bump its origin
+// to "ast_resolved". Edges with zero or multiple candidates are
+// untouched — they fall through to the Go resolver which has the
+// language/scope/visibility rules needed to disambiguate.
+//
+// The query runs as one statement on the server; the Go side does
+// nothing per resolved edge. On a 50k-file repo this collapses
+// what would otherwise be ~30k per-edge round-trips into a single
+// Cypher Execute.
+func (s *Store) ResolveUniqueNames() (int, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	// Strategy: for each unresolved edge, derive the name by
+	// stripping the "unresolved::" prefix. Match it against Node.name.
+	// If exactly one candidate, swap the edge's to-pointer (DELETE +
+	// CREATE a new edge with the same properties but the resolved
+	// to-endpoint — Kuzu rel edges are immutable on their endpoint
+	// pair so a direct SET of from/to is not supported).
+	const q = `
+MATCH (caller:Node)-[e:Edge]->(stub:Node)
+WHERE stub.kind = 'unresolved'
+WITH e, caller, stub, stub.name AS name
+OPTIONAL MATCH (cnd:Node {name: name})
+WITH e, caller, stub, name, count(cnd) AS cnt
+WHERE cnt = 1
+MATCH (target:Node {name: name})
+DELETE e
+CREATE (caller)-[newE:Edge {
+    kind: e.kind,
+    file_path: e.file_path,
+    line: e.line,
+    confidence: e.confidence,
+    confidence_label: e.confidence_label,
+    origin: 'ast_resolved',
+    tier: 'ast_resolved',
+    cross_repo: e.cross_repo,
+    meta: e.meta
+}]->(target)
+RETURN count(newE) AS resolved`
+	res, err := s.conn.Query(q)
+	if err != nil {
+		return 0, fmt.Errorf("backend-resolver: %w", err)
+	}
+	defer res.Close()
+	if !res.HasNext() {
+		return 0, nil
+	}
+	row, err := res.Next()
+	if err != nil {
+		return 0, fmt.Errorf("backend-resolver: read result: %w", err)
+	}
+	defer row.Close()
+	vals, err := row.GetAsSlice()
+	if err != nil || len(vals) == 0 {
+		return 0, err
+	}
+	n, _ := vals[0].(int64)
+	if n > 0 {
+		s.edgeIdentityRevs.Add(n)
+		s.writeGen.Add(1)
+	}
+	return int(n), nil
 }
