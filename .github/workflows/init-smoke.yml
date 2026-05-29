@@ -18,6 +18,12 @@ on:
       - "cmd/gortex/init*.go"
       - "internal/agents/**"
 
+# liblbug static-links on linux with -Wl,--whole-archive (forces its weak C++
+# RTTI into the binary for the dlopen'd FTS extension; see cgo_shared.go).
+# Not on cgo's #cgo LDFLAGS allowlist, so permit it for the build step below.
+env:
+  CGO_LDFLAGS_ALLOW: '-Wl,--(no-)?whole-archive'
+
 jobs:
   dry-run:
     runs-on: ubuntu-latest

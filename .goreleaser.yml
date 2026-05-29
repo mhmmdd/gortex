@@ -30,6 +30,11 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
     env:
       - CGO_ENABLED=1
+      # liblbug static-links on linux with -Wl,--whole-archive (forces its
+      # weak C++ RTTI into the binary for the dlopen'd FTS extension; see
+      # internal/thirdparty/go-ladybug/cgo_shared.go). --whole-archive isn't
+      # on cgo's #cgo LDFLAGS allowlist, so permit it. No-op for darwin.
+      - 'CGO_LDFLAGS_ALLOW=-Wl,--(no-)?whole-archive'
     goos:
       - linux
       - darwin

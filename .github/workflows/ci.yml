@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# liblbug static-links on linux; its #cgo LDFLAGS use -Wl,--whole-archive to
+# force liblbug's weak C++ RTTI into the binary for the dlopen'd FTS extension
+# (see internal/thirdparty/go-ladybug/cgo_shared.go). --whole-archive isn't on
+# cgo's built-in #cgo LDFLAGS allowlist, so permit it for every job's build/test.
+env:
+  CGO_LDFLAGS_ALLOW: '-Wl,--(no-)?whole-archive'
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}

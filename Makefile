@@ -9,6 +9,14 @@ COMMIT    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE      ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS   := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
+# liblbug links statically on linux; the #cgo LDFLAGS use -Wl,--whole-archive
+# to force its weak C++ RTTI objects into the binary so the dlopen'd FTS
+# extension resolves them (paired with -rdynamic — see cgo_shared.go).
+# --whole-archive isn't on cgo's #cgo LDFLAGS allowlist, so it must be
+# explicitly permitted. Exported so every go build/test recipe inherits it;
+# it's a no-op on darwin/windows (those targets don't use the flag).
+export CGO_LDFLAGS_ALLOW := -Wl,--(no-)?whole-archive
+
 .PHONY: build build-onnx build-gomlx build-hugot build-windows \
        lbug test bench bench-rpi bench-rpi-quick bench-rpi-profile bench-compare \
        lint fmt clean install dev-link tag-release \
