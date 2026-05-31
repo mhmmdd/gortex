@@ -253,11 +253,15 @@ func (cr *CrossRepoResolver) ResolveAll() *CrossRepoStats {
 	// the barrier (cr never reindexes per-edge mid-loop, so unlike the
 	// master pool no edge clone is needed); stats are summed.
 	workers := runtime.NumCPU()
-	if workers < 1 {
-		workers = 1
-	}
+	// Clamp to the work count BEFORE flooring at 1: an empty pending slice
+	// must leave workers >= 1 so the chunk division below can't divide by
+	// zero. With workers == 1 and len(pending) == 0 the chunk is 0 and every
+	// worker's [start,end) is empty, so the pass is a correct no-op.
 	if workers > len(pending) {
 		workers = len(pending)
+	}
+	if workers < 1 {
+		workers = 1
 	}
 	perWorkerBatch := make([][]graph.EdgeReindex, workers)
 	perWorkerStats := make([]*CrossRepoStats, workers)
