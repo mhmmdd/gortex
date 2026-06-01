@@ -4,9 +4,8 @@
 
 .DESCRIPTION
     Downloads the signed Windows release archive, verifies its SHA-256
-    checksum, installs gortex.exe together with the runtime DLLs it ships
-    with (lbug_shared.dll + the mingw and VC++ runtime), and puts the
-    install directory on the user PATH.
+    checksum, installs gortex.exe together with the mingw runtime DLLs it
+    ships with, and puts the install directory on the user PATH.
 
     Usage:
         irm https://get.gortex.dev/install.ps1 | iex
@@ -143,11 +142,11 @@ function Main {
             Write-Info "backing up existing binary to $backup"
             Move-Item -Path $target -Destination $backup -Force
         }
-        # Install the whole archive, not just the .exe: on Windows gortex
-        # links liblbug DYNAMICALLY and ships lbug_shared.dll plus the
-        # mingw and VC++ runtime DLLs in the zip. Windows resolves DLLs
-        # from the executable's own directory, so every file must land
-        # next to gortex.exe or it won't start.
+        # Install the whole archive, not just the .exe: the Windows zip
+        # ships the mingw C/C++ runtime DLLs that gortex.exe links
+        # dynamically. Windows resolves DLLs from the executable's own
+        # directory, so every file must land next to gortex.exe or it
+        # won't start.
         Copy-Item -Path (Join-Path $staging '*') -Destination $installDir -Recurse -Force
         $dllCount = (Get-ChildItem -Path $installDir -Filter *.dll -ErrorAction SilentlyContinue | Measure-Object).Count
         Write-Ok "installed $target (+ $dllCount runtime DLLs)"

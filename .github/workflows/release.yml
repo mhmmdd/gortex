@@ -79,18 +79,6 @@ jobs:
 
           chmod 600 "$SIGNING_DIR"/cert.* "$SIGNING_DIR"/notary.*
 
-      # Fetch the static liblbug for every unix target into
-      # lib/static/<os>-<arch>/ on the host. $PWD is bind-mounted into the
-      # goreleaser-cross container, so the cross-compiles below link them
-      # in (self-contained binaries, nothing to ship alongside). Pinned by
-      # LBUG_VERSION inside the script.
-      - name: Fetch liblbug (linux + darwin, static)
-        run: |
-          bash scripts/fetch-lbug.sh linux amd64
-          bash scripts/fetch-lbug.sh linux arm64
-          bash scripts/fetch-lbug.sh darwin amd64
-          bash scripts/fetch-lbug.sh darwin arm64
-
       - name: Run GoReleaser (cross-compile via Docker)
         # goreleaser-cross ships osxcross + aarch64/x86_64 gcc toolchains
         # so all 4 targets (linux/amd64, linux/arm64, darwin/amd64,
@@ -220,13 +208,12 @@ jobs:
             rm -rf /tmp/macos-signing
           fi
 
-  # Windows is built on a NATIVE windows runner because lbug's windows lib
-  # is MSVC-built and must be linked dynamically — the mingw .exe loads
-  # lbug_shared.dll via `-l:lbug_shared.dll` (no import lib / gendef
-  # needed), so it can't be produced by the goreleaser-cross job above.
-  # This job builds, bundles the .exe with lbug_shared.dll + the mingw and
-  # VC++ runtime DLLs it needs, zips, cosign-signs, and appends the zip to
-  # the release the `release` job already created.
+  # Windows is built on a NATIVE windows runner: the CGo tree-sitter
+  # bindings need a real C/C++ toolchain (mingw-w64 ships on PATH there),
+  # and goreleaser-cross targets unix only. This job builds the .exe,
+  # bundles the mingw C/C++ runtime DLLs it links dynamically, zips,
+  # cosign-signs, and appends the zip to the release the `release` job
+  # already created.
   release-windows:
     needs: release
     runs-on: windows-latest
@@ -244,13 +231,6 @@ jobs:
         with:
           cosign-release: v2.4.1
 
-      # Fetches lbug_shared.dll (the MSVC-built DLL) into
-      # lib/dynamic/windows/. The mingw-w64 toolchain the runner ships on
-      # PATH links the .exe directly against it.
-      - name: Fetch liblbug (windows, dynamic)
-        shell: bash
-        run: bash scripts/fetch-lbug.sh windows amd64
-
       - name: Build gortex.exe
         shell: bash
         env:
@@ -266,7 +246,6 @@ jobs:
           set -euo pipefail
           mkdir -p stage
           cp gortex.exe stage/
-          cp internal/thirdparty/go-ladybug/lib/dynamic/windows/lbug_shared.dll stage/
 
           # A missing runtime DLL must FAIL the release, never ship a
           # zip whose .exe can't start. `gcc -print-file-name` echoes the
@@ -290,12 +269,6 @@ jobs:
           for lib in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
             p="$(find_dll "$lib")" || { echo "FATAL: mingw runtime $lib not found"; exit 1; }
             cp "$p" stage/; echo "bundled $lib  <- $p"
-          done
-          # VC++ runtime the MSVC-built lbug_shared.dll imports
-          # (MSVCP140/VCRUNTIME140*). Present on windows-latest (VS).
-          for d in VCRUNTIME140.dll VCRUNTIME140_1.dll MSVCP140.dll; do
-            if [ -f "/c/Windows/System32/$d" ]; then cp "/c/Windows/System32/$d" stage/; echo "bundled $d";
-            else echo "FATAL: VC++ runtime $d not found on runner"; exit 1; fi
           done
           ls -la stage/
 

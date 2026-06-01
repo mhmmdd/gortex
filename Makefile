@@ -9,36 +9,17 @@ COMMIT    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE      ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS   := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-# liblbug links statically on linux; the #cgo LDFLAGS use -Wl,--whole-archive
-# to force its weak C++ RTTI objects into the binary so the dlopen'd FTS
-# extension resolves them (paired with -rdynamic — see cgo_shared.go).
-# --whole-archive isn't on cgo's #cgo LDFLAGS allowlist, so it must be
-# explicitly permitted. Exported so every go build/test recipe inherits it;
-# it's a no-op on darwin/windows (those targets don't use the flag).
-export CGO_LDFLAGS_ALLOW := -Wl,--(no-)?whole-archive
-
 .PHONY: build build-onnx build-gomlx build-hugot build-windows \
-       lbug test bench bench-rpi bench-rpi-quick bench-rpi-profile bench-compare \
+       test bench bench-rpi bench-rpi-quick bench-rpi-profile bench-compare \
        lint fmt clean install dev-link tag-release \
        deps-onnx deps-gomlx deps-hugot deps-vectors \
        claude-plugin claude-plugin-check
 
 # ---------------------------------------------------------------------------
-# Native dependency: liblbug (the ladybug storage engine)
-# ---------------------------------------------------------------------------
-# Fetched at build time, never committed. Static on linux/darwin (baked
-# into a self-contained binary); dynamic on windows (lbug's windows build
-# is MSVC — the .exe links lbug_shared.dll via a generated mingw import
-# lib and ships the DLL alongside). Idempotent: skips if present; set
-# LBUG_FORCE=1 to refetch, LBUG_VERSION to pin a version.
-lbug:
-	@bash scripts/fetch-lbug.sh
-
-# ---------------------------------------------------------------------------
 # Build variants
 # ---------------------------------------------------------------------------
 
-build: lbug
+build:
 	go build -ldflags '$(LDFLAGS)' -tags llama -o $(BINARY) ./cmd/gortex/
 
 build-onnx: deps-onnx
@@ -52,7 +33,7 @@ build-gomlx: deps-gomlx
 build-hugot: deps-hugot
 	go build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/gortex/
 
-test: lbug
+test:
 	go test -race ./...
 
 bench:
@@ -135,7 +116,6 @@ tag-release:
 
 # Cross-compile for Raspberry Pi (ARM64)
 build-rpi:
-	@bash scripts/fetch-lbug.sh linux arm64
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
 		go build -ldflags '$(LDFLAGS)' -o gortex-rpi ./cmd/gortex/
 	@echo "✓ Built gortex-rpi (linux/arm64)"
@@ -154,11 +134,10 @@ build-rpi32:
 # mingw-w64 C/C++ runtime (libstdc++, libgcc, winpthread) into the .exe
 # so it runs on a stock Windows box without bundled DLLs.
 build-windows:
-	@bash scripts/fetch-lbug.sh windows amd64
 	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
 		CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ \
 		go build -ldflags '$(LDFLAGS) -extldflags "-static"' -o gortex.exe ./cmd/gortex/
-	@echo "✓ Built gortex.exe (windows/amd64) — ship lbug_shared.dll alongside"
+	@echo "✓ Built gortex.exe (windows/amd64)"
 
 # ---------------------------------------------------------------------------
 # Marketplace plugin bundle

@@ -6,13 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-# liblbug static-links on linux; its #cgo LDFLAGS use -Wl,--whole-archive to
-# force liblbug's weak C++ RTTI into the binary for the dlopen'd FTS extension
-# (see internal/thirdparty/go-ladybug/cgo_shared.go). --whole-archive isn't on
-# cgo's built-in #cgo LDFLAGS allowlist, so permit it for every job's build/test.
-env:
-  CGO_LDFLAGS_ALLOW: '-Wl,--(no-)?whole-archive'
-
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -26,9 +19,6 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: ${{ matrix.go-version }}
-
-      - name: Fetch liblbug
-        run: bash scripts/fetch-lbug.sh
 
       - name: Build
         run: go build -o gortex ./cmd/gortex/
@@ -56,10 +46,6 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: '1.26'
-
-      - name: Fetch liblbug (windows dynamic — lbug_shared.dll)
-        shell: bash
-        run: bash scripts/fetch-lbug.sh
 
       - name: Build CLI
         run: go build -o gortex.exe ./cmd/gortex/
@@ -90,9 +76,6 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: '1.26'
-
-      - name: Fetch liblbug
-        run: bash scripts/fetch-lbug.sh
 
       - name: Install ONNX Runtime
         run: |

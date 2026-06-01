@@ -1,17 +1,11 @@
 version: 2
 
 # Run inside ghcr.io/goreleaser/goreleaser-cross — the Docker image ships
-# cross-compile toolchains so CGO (tree-sitter + the statically-linked
-# liblbug) links cleanly on a single Linux runner. This config builds the
-# UNIX targets only (linux + darwin, both with liblbug static-linked into
-# a self-contained binary). Windows is built separately on a native
-# windows runner (see the `release-windows` job in release.yml) because
-# lbug's windows lib is MSVC-built and must be linked dynamically + shipped
-# as a DLL — it can't be static-linked from mingw.
-#
-# liblbug static archives are fetched into lib/static/<os>-<arch>/ by the
-# "Fetch liblbug" step in release.yml before this runs (the repo is
-# bind-mounted into the container).
+# cross-compile toolchains so CGO (tree-sitter) links cleanly on a single
+# Linux runner. This config builds the UNIX targets only (linux + darwin).
+# Windows is built separately on a native windows runner (see the
+# `release-windows` job in release.yml) because the CGo tree-sitter
+# bindings need a real C/C++ toolchain there.
 before:
   hooks:
     - go mod tidy
@@ -30,11 +24,6 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
     env:
       - CGO_ENABLED=1
-      # liblbug static-links on linux with -Wl,--whole-archive (forces its
-      # weak C++ RTTI into the binary for the dlopen'd FTS extension; see
-      # internal/thirdparty/go-ladybug/cgo_shared.go). --whole-archive isn't
-      # on cgo's #cgo LDFLAGS allowlist, so permit it. No-op for darwin.
-      - 'CGO_LDFLAGS_ALLOW=-Wl,--(no-)?whole-archive'
     goos:
       - linux
       - darwin
@@ -145,8 +134,7 @@ homebrew_casks:
       shell_parameter_format: cobra
 
 # NOTE: the Scoop manifest is intentionally NOT generated here. Windows is
-# built by the separate `release-windows` job (native runner, dynamic
-# liblbug) and isn't an artifact of this goreleaser-cross run, so goreleaser
-# has no windows zip to point a scoop manifest at. Re-add a scoop manifest
-# (pointing at the windows job's zip) as a follow-up once the windows
-# release path is settled.
+# built by the separate `release-windows` job (native runner) and isn't an
+# artifact of this goreleaser-cross run, so goreleaser has no windows zip to
+# point a scoop manifest at. Re-add a scoop manifest (pointing at the windows
+# job's zip) as a follow-up once the windows release path is settled.
