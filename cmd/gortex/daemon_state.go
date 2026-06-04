@@ -196,6 +196,7 @@ func buildDaemonState(logger *zap.Logger) (*daemonState, error) {
 	languages.RegisterAll(reg)
 	languages.RegisterCustomGrammars(reg, cfg.Index.Grammars, logger)
 	languages.RegisterExtractorPlugins(reg, cfg.Index.ExtractorPlugins, logger)
+	languages.RegisterFallbackChunkers(reg, cfg.Index.FallbackChunkers, logger)
 
 	// Warm-start from snapshot when one exists. Subsequent
 	// ReconcileRepoCtx calls re-index only the files that changed since

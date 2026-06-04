@@ -557,6 +557,15 @@ type IndexConfig struct {
 	// ExtractorPluginSpec. Empty by default. Configured under
 	// `index.extractor_plugins` in .gortex.yaml.
 	ExtractorPlugins []ExtractorPluginSpec `mapstructure:"extractor_plugins" yaml:"extractor_plugins,omitempty"`
+	// FallbackChunkers registers declarative regex chunkers for
+	// languages Gortex has no tree-sitter grammar for — the "give a
+	// grammar-less language a coarse outline without writing Go" entry
+	// point. Each spec names a language + file extensions and a list of
+	// regex patterns; matching files yield one node per pattern match
+	// plus an EdgeDefines from the file. See FallbackChunkerSpec. Empty
+	// by default. Configured under `index.fallback_chunkers` in
+	// .gortex.yaml.
+	FallbackChunkers []FallbackChunkerSpec `mapstructure:"fallback_chunkers" yaml:"fallback_chunkers,omitempty"`
 }
 
 // GrammarSpec declares a user-supplied tree-sitter grammar to load at
@@ -633,6 +642,40 @@ type ExtractorPluginSpec struct {
 	Args []string `mapstructure:"args" yaml:"args,omitempty"`
 	// TimeoutMs bounds the plugin subprocess; 0 uses a default.
 	TimeoutMs int `mapstructure:"timeout_ms" yaml:"timeout_ms,omitempty"`
+}
+
+// FallbackChunkerSpec declares a declarative regex chunker for a
+// grammar-less language — the config-driven SPI for giving a language
+// Gortex has no tree-sitter grammar a coarse symbol outline without
+// writing Go. Files whose extension matches are scanned with each
+// pattern; every match emits a node of the pattern's kind (validated
+// against the graph node kinds) plus an EdgeDefines from the file. A
+// language or extension that collides with a built-in extractor is
+// skipped — built-ins win.
+type FallbackChunkerSpec struct {
+	// Language is the name the chunker registers under. A name that
+	// collides with a built-in extractor is skipped.
+	Language string `mapstructure:"language" yaml:"language"`
+	// Extensions are the file extensions (leading dot) the chunker
+	// claims. An extension already claimed by a built-in extractor is
+	// skipped.
+	Extensions []string `mapstructure:"extensions" yaml:"extensions"`
+	// Patterns are the regex rules applied to a matching file's content.
+	Patterns []ChunkPattern `mapstructure:"patterns" yaml:"patterns"`
+}
+
+// ChunkPattern is a single regex rule of a FallbackChunkerSpec. Each
+// match yields one node of Kind named by the NameGroup-th capture.
+type ChunkPattern struct {
+	// Kind is the graph node kind to emit (e.g. "function", "type").
+	// A kind that is not a valid graph node kind is skipped.
+	Kind string `mapstructure:"kind" yaml:"kind"`
+	// Regex is the (Go-syntax) pattern matched against the file content.
+	// A pattern that fails to compile skips the whole chunker spec.
+	Regex string `mapstructure:"regex" yaml:"regex"`
+	// NameGroup is the capture-group index whose text names the node.
+	// Zero (the default) uses group 1 — the first parenthesised group.
+	NameGroup int `mapstructure:"name_group" yaml:"name_group,omitempty"`
 }
 
 // CoverageConfig collects the per-domain coverage extraction gates.

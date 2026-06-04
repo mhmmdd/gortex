@@ -154,6 +154,7 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	languages.RegisterAll(reg)
 	languages.RegisterCustomGrammars(reg, cfg.Index.Grammars, logger)
 	languages.RegisterExtractorPlugins(reg, cfg.Index.ExtractorPlugins, logger)
+	languages.RegisterFallbackChunkers(reg, cfg.Index.FallbackChunkers, logger)
 	idx := indexer.New(g, reg, cfg.Index, logger)
 
 	// --snapshot pre-loads the in-memory graph from a gob+gzip file
