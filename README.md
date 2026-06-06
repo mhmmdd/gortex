@@ -3,8 +3,6 @@
   <img src="assets/wall.svg" alt="Gortex" width="500">
 </p>
 
-# Gortex
-
 ### Code graph and intelligence engine that indexes repositories
 #### and exposes it via CLI, MCP Server, and web UI.
 
