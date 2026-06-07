@@ -53,6 +53,16 @@ func OpenBackend(name, path string, bufferPoolMB uint64, logger *zap.Logger) (gr
 	}
 }
 
+// isSqliteBackend reports whether name selects the on-disk sqlite store.
+func isSqliteBackend(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "sqlite", "sqlite3":
+		return true
+	default:
+		return false
+	}
+}
+
 // resolveBackendPath turns an empty backend path into a default under the
 // unified store directory (~/.gortex/store/<filename>, or the XDG_DATA_HOME
 // equivalent). Otherwise expands ~ and returns the absolute path, creating

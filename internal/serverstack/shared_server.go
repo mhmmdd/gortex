@@ -1,11 +1,13 @@
 package serverstack
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"go.uber.org/zap"
 
 	"github.com/zzet/gortex/internal/astquery"
@@ -151,6 +153,31 @@ func NewSharedServer(cfg SharedServerConfig) (*SharedServer, error) {
 	}
 
 	s := &SharedServer{}
+
+	// Cross-process store lock (D-21): a writable, on-disk lifecycle
+	// acquires an advisory flock on store.sqlite.lock and fails fast if
+	// another process owns the store. SQLite's in-process writeMu +
+	// busy_timeout serialise in-process writers only; nothing else stops
+	// a second OS process opening the same file and corrupting it.
+	if cfg.Lifecycle.Writable() && isSqliteBackend(backendName) {
+		storePath, perr := resolveBackendPath(cfg.BackendPath, "store.sqlite")
+		if perr != nil {
+			return nil, perr
+		}
+		lock := flock.New(storePath + ".lock")
+		locked, lerr := lock.TryLock()
+		if lerr != nil {
+			return nil, fmt.Errorf("acquire store lock %q: %w", storePath+".lock", lerr)
+		}
+		if !locked {
+			hint := "the store is already owned by another gortex process"
+			if pid, ok := daemon.RunningPID(); ok {
+				hint = fmt.Sprintf("store already owned by daemon pid %d", pid)
+			}
+			return nil, fmt.Errorf("%s — stop it first (`gortex daemon stop`)", hint)
+		}
+		s.cleanup = append(s.cleanup, func() { _ = lock.Unlock() })
+	}
 
 	g, backendCleanup, err := OpenBackend(backendName, cfg.BackendPath, cfg.BufferPoolMB, logger)
 	if err != nil {
