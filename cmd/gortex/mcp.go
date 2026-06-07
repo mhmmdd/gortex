@@ -13,7 +13,6 @@ import (
 
 	"github.com/zzet/gortex/internal/config"
 	"github.com/zzet/gortex/internal/contracts"
-	"github.com/zzet/gortex/internal/daemon"
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/indexer"
 	gortexmcp "github.com/zzet/gortex/internal/mcp"
@@ -87,23 +86,45 @@ func init() {
 	rootCmd.AddCommand(mcpCmd)
 }
 
+var legacyMCPFlagsWarned bool
+
+// warnLegacyMCPFlags emits one stderr line per explicitly-set legacy flag
+// (--index/--watch/--proxy/--no-daemon). These are permanent no-op compat
+// shims for un-migrated on-disk editor configs. stderr only — stdout is
+// the MCP JSON-RPC stream and a stray byte corrupts the protocol.
+func warnLegacyMCPFlags(cmd *cobra.Command) {
+	if legacyMCPFlagsWarned {
+		return
+	}
+	legacyMCPFlagsWarned = true
+	for _, name := range []string{"index", "watch", "proxy", "no-daemon"} {
+		if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+			fmt.Fprintf(os.Stderr, "[gortex] note: --%s is deprecated and ignored on the proxy path; "+
+				"`gortex mcp` proxies to the daemon (auto-starting it) and falls back to an embedded server.\n", name)
+		}
+	}
+}
+
 func runMCP(cmd *cobra.Command, args []string) error {
-	// Daemon-first: if stdio indicates an MCP client spawned us AND a
-	// daemon is listening, proxy through it instead of spinning up an
-	// embedded server. Terminal invocations fall through to embedded by
-	// default.
-	if shouldTryProxy(mcpNoDaemon, mcpForceProxy) {
-		ran, proxyErr := runProxy(cmd.Context())
-		if proxyErr != nil {
-			return proxyErr
-		}
-		if ran {
-			return nil
-		}
-		// Daemon unavailable — fall through to embedded.
-		if mcpForceProxy {
-			return fmt.Errorf("--proxy was passed but no daemon is running (socket: %s)",
-				daemon.SocketPath())
+	warnLegacyMCPFlags(cmd)
+
+	// Daemon-first: ensure a daemon is up (auto-starting it under a
+	// single-flight lock when GORTEX_AUTOSTART allows), then relay stdio
+	// over its socket. The old stdin-TTY heuristic is gone — behavior is
+	// identical from a terminal or a pipe given the same daemon state.
+	// --no-daemon forces the embedded fallback (deprecated; warned above).
+	if !mcpNoDaemon {
+		switch resolveDaemonDecision() {
+		case daemonReady, daemonAutostarted:
+			ran, proxyErr := runProxy(cmd.Context())
+			if proxyErr != nil {
+				return proxyErr
+			}
+			if ran {
+				return nil
+			}
+			// Lost the daemon between ensure and dial (rare) — fall
+			// through to the embedded server.
 		}
 	}
 
