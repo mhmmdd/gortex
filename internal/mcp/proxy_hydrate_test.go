@@ -3,12 +3,39 @@ package mcp
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/zzet/gortex/internal/graph"
 	"github.com/zzet/gortex/internal/query"
 )
+
+// TestAnnotateProxyFreshness asserts the read response surfaces last_synced
+// (the stalest proxy node's fetch time) when the traversal crossed into a
+// federation proxy, and leaves it nil for a purely-local result.
+func TestAnnotateProxyFreshness(t *testing.T) {
+	now := time.Now()
+	older := now.Add(-10 * time.Minute)
+	sg := &query.SubGraph{Nodes: []*graph.Node{
+		{ID: "local/a.go::Foo", Kind: graph.KindFunction, Name: "Foo"},
+		{ID: graph.ProxyNodeID("rB", "rb/x::P1"), Name: "P1", Origin: "remote:rB", Stub: true, FetchedAt: now},
+		{ID: graph.ProxyNodeID("rB", "rb/y::P2"), Name: "P2", Origin: "remote:rB", Stub: true, FetchedAt: older},
+	}}
+	annotateProxyFreshness(sg)
+	if sg.LastSynced == nil {
+		t.Fatal("last_synced must be set when the result holds proxy nodes")
+	}
+	if !sg.LastSynced.Equal(older) {
+		t.Errorf("last_synced = %v, want the stalest %v", sg.LastSynced, older)
+	}
+
+	local := &query.SubGraph{Nodes: []*graph.Node{{ID: "local::X", Kind: graph.KindFunction}}}
+	annotateProxyFreshness(local)
+	if local.LastSynced != nil {
+		t.Error("last_synced must stay nil for a purely-local result")
+	}
+}
 
 func TestHydrateProxyTargets(t *testing.T) {
 	g := graph.New()

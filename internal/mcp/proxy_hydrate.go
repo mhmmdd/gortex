@@ -2,9 +2,33 @@ package mcp
 
 import (
 	"context"
+	"time"
 
 	"github.com/zzet/gortex/internal/graph"
+	"github.com/zzet/gortex/internal/query"
 )
+
+// annotateProxyFreshness sets sg.LastSynced to the stalest fetched-at among
+// any federation proxy nodes in the result, surfacing how fresh the
+// remote-derived part of the answer is. A no-op when the result holds no
+// proxy node, so a purely-local result is unchanged.
+func annotateProxyFreshness(sg *query.SubGraph) {
+	if sg == nil {
+		return
+	}
+	var oldest time.Time
+	for _, n := range sg.Nodes {
+		if !graph.IsProxyNode(n) || n.FetchedAt.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || n.FetchedAt.Before(oldest) {
+			oldest = n.FetchedAt
+		}
+	}
+	if !oldest.IsZero() {
+		sg.LastSynced = &oldest
+	}
+}
 
 // SetProxyHydrator installs the cross-daemon proxy-edge lazy hydration hook.
 // The daemon wires it to ProxyHydrator.Hydrate when federation.edges is

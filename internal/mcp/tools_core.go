@@ -1940,6 +1940,7 @@ func (s *Server) handleGetCallChain(ctx context.Context, req mcp.CallToolRequest
 	sg = filterSubGraph(sg, allowed)
 	sg.FilterByMinTier(minTier)
 	enrichSubGraphEdges(sg)
+	annotateProxyFreshness(sg)
 	return s.returnSubGraph(ctx, req, sg)
 }
 
@@ -1967,6 +1968,7 @@ func (s *Server) handleGetCallers(ctx context.Context, req mcp.CallToolRequest) 
 	if len(sg.Edges) == 0 {
 		sg.Caveat = graph.CaveatForZeroEdge(s.graph, id)
 	}
+	annotateProxyFreshness(sg)
 	return s.returnSubGraph(ctx, req, sg)
 }
 
