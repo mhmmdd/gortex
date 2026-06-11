@@ -15,7 +15,6 @@ import (
 	"github.com/zzet/gortex/internal/llm/conversationlog"
 	"github.com/zzet/gortex/internal/persistence"
 	"github.com/zzet/gortex/internal/platform"
-	"github.com/zzet/gortex/internal/savings"
 	"github.com/zzet/gortex/internal/server"
 	"github.com/zzet/gortex/internal/server/hub"
 	"github.com/zzet/gortex/internal/serverstack"
@@ -140,9 +139,13 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	if sideStoreCacheDir == "" {
 		sideStoreCacheDir = platform.CacheDir()
 	}
-	savingsPath := savings.DefaultPath()
+	// The savings ledger rides in the same sidecar database the side
+	// stores use (serverstack derives it from NotesDir). A custom
+	// --cache-dir also relocates the flat-file era's savings.json the
+	// one-shot legacy import looks for.
+	savingsLegacyJSON := ""
 	if mcpCacheDir != "" {
-		savingsPath = filepath.Join(mcpCacheDir, "savings.json")
+		savingsLegacyJSON = filepath.Join(mcpCacheDir, "savings.json")
 	}
 
 	ss, err := serverstack.NewSharedServer(serverstack.SharedServerConfig{
@@ -166,8 +169,8 @@ func runMCP(cmd *cobra.Command, args []string) error {
 			FeedbackRepo: mcpIndex,
 			NotebookPath: mcpIndex,
 		},
-		SavingsPath: savingsPath,
-		SavingsRepo: mcpIndex,
+		SavingsLegacyJSON: savingsLegacyJSON,
+		SavingsRepo:       mcpIndex,
 	})
 	if err != nil {
 		return fmt.Errorf("build server stack: %w", err)
@@ -203,11 +206,6 @@ func runMCP(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
-
-	// Periodic savings flush. NewSharedServer flushes on Close (deferred
-	// above); this guards against a crash losing accumulated totals.
-	stopSavingsFlush := srv.StartPeriodicSavingsFlush(5 * time.Minute)
-	defer stopSavingsFlush()
 
 	fmt.Fprintf(os.Stderr, "[gortex] MCP server ready (transport: %s)\n", mcpTransport)
 

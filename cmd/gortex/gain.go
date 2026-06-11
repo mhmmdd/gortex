@@ -25,6 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zzet/gortex/internal/persistence"
 	"github.com/zzet/gortex/internal/savings"
 )
 
@@ -321,25 +322,27 @@ func (h *gainHistory) toJSON() map[string]any {
 	}
 }
 
-// loadHistory loads the cumulative savings store, restricted to the
-// since-window via the JSONL event log. Returns an error only on
-// hard I/O failures; missing files / empty stores produce a populated
-// gainHistory with Calls=0 so the caller can decide whether to render.
+// loadHistory loads the cumulative savings ledger, restricted to the
+// since-window via the event history. Returns an error only on hard
+// I/O failures; an empty ledger produces a populated gainHistory with
+// Calls=0 so the caller can decide whether to render.
 func loadHistory(cacheDir string, since time.Duration) (*gainHistory, error) {
-	path := savings.DefaultPath()
+	path := savings.DefaultDBPath()
+	legacyJSON := savings.DefaultPath()
 	if cacheDir != "" {
-		path = filepath.Join(cacheDir, "savings.json")
+		path = persistence.DefaultSidecarPath(cacheDir)
+		legacyJSON = filepath.Join(cacheDir, "savings.json")
 	}
 	store, err := savings.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	_ = store.ImportLegacy(legacyJSON)
 	snap := store.Snapshot()
-	eventsPath := savings.EventsPathFor(path)
 
 	if since <= 0 {
 		// --since 0 → entire-history view; just use the cumulative
-		// totals. No JSONL scan needed.
+		// totals. No event scan needed.
 		return &gainHistory{
 			Path:     path,
 			Since:    since,
@@ -351,7 +354,7 @@ func loadHistory(cacheDir string, since time.Duration) (*gainHistory, error) {
 	}
 
 	cutoff := time.Now().UTC().Add(-since)
-	events, err := savings.LoadEvents(eventsPath, cutoff)
+	events, err := store.EventsSince(cutoff)
 	if err != nil {
 		return nil, err
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zzet/gortex/internal/persistence"
 	"github.com/zzet/gortex/internal/progress"
 	"github.com/zzet/gortex/internal/savings"
 	"github.com/zzet/gortex/internal/tui"
@@ -58,25 +59,26 @@ func init() {
 }
 
 func runSavings(_ *cobra.Command, _ []string) error {
-	path := savings.DefaultPath()
+	dbPath := savings.DefaultDBPath()
+	legacyJSON := savings.DefaultPath()
 	if savingsCacheDir != "" {
-		path = filepath.Join(savingsCacheDir, "savings.json")
+		dbPath = persistence.DefaultSidecarPath(savingsCacheDir)
+		legacyJSON = filepath.Join(savingsCacheDir, "savings.json")
 	}
-	eventsPath := savings.EventsPathFor(path)
 
-	store, err := savings.Open(path)
+	store, err := savings.Open(dbPath)
 	if err != nil {
-		return fmt.Errorf("open savings store: %w", err)
+		return fmt.Errorf("open savings ledger: %w", err)
+	}
+	if ierr := store.ImportLegacy(legacyJSON); ierr != nil {
+		fmt.Fprintf(os.Stderr, "[gortex savings] legacy import failed: %v\n", ierr)
 	}
 
 	if savingsReset {
 		if err := store.Reset(); err != nil {
 			return fmt.Errorf("reset: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "[gortex savings] reset cumulative totals at %s\n", path)
-		if eventsPath != "" {
-			fmt.Fprintf(os.Stderr, "[gortex savings] removed event log at %s\n", eventsPath)
-		}
+		fmt.Fprintf(os.Stderr, "[gortex savings] reset cumulative totals + event history at %s\n", dbPath)
 		return nil
 	}
 
@@ -86,26 +88,23 @@ func runSavings(_ *cobra.Command, _ []string) error {
 	if savingsUTC {
 		loc = time.UTC
 	}
-	buckets, err := savings.BuildDashboard(eventsPath, snap.Totals, time.Now(), loc)
+	events, err := store.EventsSince(time.Time{})
 	if err != nil {
-		// Don't fail the whole command on event-log read errors — fall
-		// back to a dashboard with empty Today/7d buckets.
-		fmt.Fprintf(os.Stderr, "[gortex savings] event log read failed: %v\n", err)
-		buckets = []savings.Bucket{
-			{Label: "Today"},
-			{Label: "Last 7 days"},
-			{Label: "All time", Totals: snap.Totals},
-		}
+		// Don't fail the whole command on event read errors — fall back
+		// to a dashboard with empty Today/7d buckets.
+		fmt.Fprintf(os.Stderr, "[gortex savings] event history read failed: %v\n", err)
+		events = nil
 	}
+	buckets := savings.BuildDashboard(events, snap.Totals, time.Now(), loc)
 
 	if savingsJSON {
-		return emitSavingsJSON(snap, buckets, path, eventsPath)
+		return emitSavingsJSON(snap, buckets, dbPath)
 	}
-	emitSavingsDashboard(snap, buckets, path, eventsPath)
+	emitSavingsDashboard(snap, buckets, dbPath)
 	return nil
 }
 
-func emitSavingsJSON(snap savings.File, buckets []savings.Bucket, path, eventsPath string) error {
+func emitSavingsJSON(snap savings.File, buckets []savings.Bucket, path string) error {
 	bucketJSON := make([]map[string]any, 0, len(buckets))
 	for _, b := range buckets {
 		entry := map[string]any{
@@ -133,14 +132,17 @@ func emitSavingsJSON(snap savings.File, buckets []savings.Bucket, path, eventsPa
 
 	out := map[string]any{
 		"path":             path,
-		"events_path":      eventsPath,
-		"first_seen":       snap.FirstSeen.Format(time.RFC3339),
-		"last_updated":     snap.LastUpdated.Format(time.RFC3339),
 		"tokens_saved":     snap.Totals.TokensSaved,
 		"tokens_returned":  snap.Totals.TokensReturned,
 		"calls_counted":    snap.Totals.CallsCounted,
 		"cost_avoided_usd": savings.CostAvoidedAll(snap.Totals.TokensSaved),
 		"buckets":          bucketJSON,
+	}
+	if !snap.FirstSeen.IsZero() {
+		out["first_seen"] = snap.FirstSeen.Format(time.RFC3339)
+	}
+	if !snap.LastUpdated.IsZero() {
+		out["last_updated"] = snap.LastUpdated.Format(time.RFC3339)
 	}
 	if len(snap.PerRepo) > 0 {
 		out["per_repo"] = snap.PerRepo
@@ -161,7 +163,7 @@ func emitSavingsJSON(snap savings.File, buckets []savings.Bucket, path, eventsPa
 // On a TTY we wrap the header in a styled banner + stat-strip card; on a
 // non-TTY (output piped into grep / a file) we preserve the bare text
 // header so script parsers keep matching.
-func emitSavingsDashboard(snap savings.File, buckets []savings.Bucket, path, eventsPath string) {
+func emitSavingsDashboard(snap savings.File, buckets []savings.Bucket, path string) {
 	tty := progress.IsTTY(os.Stdout) && !noProgress
 
 	if tty {
@@ -173,9 +175,6 @@ func emitSavingsDashboard(snap savings.File, buckets []savings.Bucket, path, eve
 		fmt.Println(banner)
 		fmt.Println()
 		fmt.Println("  " + progress.Row("store", path, 14))
-		if eventsPath != "" {
-			fmt.Println("  " + progress.Row("event log", eventsPath, 14))
-		}
 		if !snap.FirstSeen.IsZero() {
 			fmt.Println("  " + progress.Row("tracking since", snap.FirstSeen.Format("2006-01-02 15:04"), 14))
 		}
@@ -186,9 +185,6 @@ func emitSavingsDashboard(snap savings.File, buckets []savings.Bucket, path, eve
 		fmt.Println("Gortex Token Savings")
 		fmt.Println("====================")
 		fmt.Printf("Store:          %s\n", path)
-		if eventsPath != "" {
-			fmt.Printf("Event log:      %s\n", eventsPath)
-		}
 		if !snap.FirstSeen.IsZero() {
 			fmt.Printf("Tracking since: %s\n", snap.FirstSeen.Format("2006-01-02 15:04"))
 		}

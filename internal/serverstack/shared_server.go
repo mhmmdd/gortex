@@ -19,6 +19,7 @@ import (
 	gortexmcp "github.com/zzet/gortex/internal/mcp"
 	"github.com/zzet/gortex/internal/parser"
 	"github.com/zzet/gortex/internal/parser/languages"
+	"github.com/zzet/gortex/internal/persistence"
 	"github.com/zzet/gortex/internal/query"
 	"github.com/zzet/gortex/internal/savings"
 	"github.com/zzet/gortex/internal/semantic"
@@ -86,11 +87,17 @@ type SharedServerConfig struct {
 	// SemanticMode selects the goanalysis provider mode: "callgraph"
 	// builds the call graph; anything else (default) type-checks.
 	SemanticMode string
-	// SavingsPath overrides the token-savings store path; empty uses the
-	// default (~/.gortex/cache/savings.json). SavingsRepo scopes the
-	// accumulated totals (empty = workspace-global).
-	SavingsPath string
-	SavingsRepo string
+	// SavingsPath overrides the token-savings ledger database; empty
+	// derives <SideStores.NotesDir>/sidecar.sqlite (the same sidecar the
+	// notes/memories managers share), falling back to the machine
+	// default under the data dir. SavingsRepo scopes the accumulated
+	// totals (empty = workspace-global). SavingsLegacyJSON names the
+	// flat-file era's cumulative savings.json to import once — its
+	// sibling .jsonl event log rides along; empty uses the historical
+	// default location under the cache dir.
+	SavingsPath       string
+	SavingsLegacyJSON string
+	SavingsRepo       string
 }
 
 // SideStores configures where the agent-authored knowledge stores
@@ -455,9 +462,20 @@ func NewSharedServer(cfg SharedServerConfig) (*SharedServer, error) {
 
 	savingsPath := cfg.SavingsPath
 	if savingsPath == "" {
-		savingsPath = savings.DefaultPath()
+		if sideCfg.NotesDir != "" {
+			savingsPath = persistence.DefaultSidecarPath(sideCfg.NotesDir)
+		} else {
+			savingsPath = savings.DefaultDBPath()
+		}
 	}
 	if savingsStore, err := savings.Open(savingsPath); err == nil {
+		legacyJSON := cfg.SavingsLegacyJSON
+		if legacyJSON == "" {
+			legacyJSON = savings.DefaultPath()
+		}
+		if ierr := savingsStore.ImportLegacy(legacyJSON); ierr != nil {
+			logger.Warn("serverstack: legacy savings import failed", zap.Error(ierr))
+		}
 		srv.InitSavings(savingsStore, cfg.SavingsRepo)
 		s.cleanup = append(s.cleanup, func() { _ = srv.FlushSavings() })
 	} else {
