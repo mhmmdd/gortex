@@ -732,7 +732,7 @@ func (s *Server) handlePrefetchContext(ctx context.Context, req mcp.CallToolRequ
 func (s *Server) handleAnalyze(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	kind, err := req.RequireString("kind")
 	if err != nil {
-		return mcp.NewToolResultError("kind is required (one of: dead_code, hotspots, cycles, would_create_cycle, todos, blame, coverage, stale_code, ownership, coverage_gaps, stale_flags, releases, cgo_users, wasm_users, orphan_tables, unreferenced_tables, coverage_summary, channel_ops, goroutine_spawns, field_writers, race_writes, unclosed_channels, unsafe_patterns, health_score, annotation_users, config_readers, event_emitters, pubsub, string_emitters, error_surface, log_events, sql_rebuild, external_calls, synthesizers, resolution_outcomes, retrieval_log, routes, models, components, k8s_resources, images, kustomize, cross_repo, impact, named, tests_as_edges, connectivity_health, pagerank, louvain, wcc, scc, kcore)"), nil
+		return mcp.NewToolResultError("kind is required (one of: dead_code, hotspots, cycles, would_create_cycle, todos, blame, coverage, stale_code, ownership, coverage_gaps, stale_flags, releases, cgo_users, wasm_users, orphan_tables, unreferenced_tables, coverage_summary, channel_ops, def_use, goroutine_spawns, field_writers, race_writes, unclosed_channels, unsafe_patterns, health_score, annotation_users, config_readers, event_emitters, pubsub, string_emitters, error_surface, log_events, sql_rebuild, external_calls, synthesizers, resolution_outcomes, retrieval_log, routes, models, components, k8s_resources, images, kustomize, cross_repo, impact, named, tests_as_edges, connectivity_health, pagerank, louvain, wcc, scc, kcore)"), nil
 	}
 	switch kind {
 	case "dead_code":
@@ -771,6 +771,8 @@ func (s *Server) handleAnalyze(ctx context.Context, req mcp.CallToolRequest) (*m
 		return s.handleAnalyzeCoverageSummary(ctx, req)
 	case "channel_ops":
 		return s.handleAnalyzeChannelOps(ctx, req)
+	case "def_use":
+		return s.handleAnalyzeDefUse(ctx, req)
 	case "goroutine_spawns":
 		return s.handleAnalyzeGoroutineSpawns(ctx, req)
 	case "field_writers":
@@ -872,7 +874,7 @@ func (s *Server) handleAnalyze(ctx context.Context, req mcp.CallToolRequest) (*m
 	case "kcore":
 		return s.handleAnalyzeKCore(ctx, req)
 	default:
-		return mcp.NewToolResultError("unknown analyze kind: " + kind + " (expected: dead_code, hotspots, cycles, would_create_cycle, todos, blame, coverage, stale_code, ownership, coverage_gaps, stale_flags, releases, cgo_users, wasm_users, orphan_tables, unreferenced_tables, coverage_summary, channel_ops, goroutine_spawns, field_writers, race_writes, unclosed_channels, unsafe_patterns, sast, hygiene, review, health_score, annotation_users, config_readers, env_var_users, sql_call_sites, fixes_history, edge_audit, domain, event_emitters, pubsub, string_emitters, error_surface, log_events, sql_rebuild, external_calls, resolution_outcomes, retrieval_log, routes, models, components, k8s_resources, images, kustomize, cross_repo, dbt_models, impact, bottlenecks, named, tests_as_edges, connectivity_health, pagerank, louvain, wcc, scc, kcore)"), nil
+		return mcp.NewToolResultError("unknown analyze kind: " + kind + " (expected: dead_code, hotspots, cycles, would_create_cycle, todos, blame, coverage, stale_code, ownership, coverage_gaps, stale_flags, releases, cgo_users, wasm_users, orphan_tables, unreferenced_tables, coverage_summary, channel_ops, def_use, goroutine_spawns, field_writers, race_writes, unclosed_channels, unsafe_patterns, sast, hygiene, review, health_score, annotation_users, config_readers, env_var_users, sql_call_sites, fixes_history, edge_audit, domain, event_emitters, pubsub, string_emitters, error_surface, log_events, sql_rebuild, external_calls, resolution_outcomes, retrieval_log, routes, models, components, k8s_resources, images, kustomize, cross_repo, dbt_models, impact, bottlenecks, named, tests_as_edges, connectivity_health, pagerank, louvain, wcc, scc, kcore)"), nil
 	}
 }
 

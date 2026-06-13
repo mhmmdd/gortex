@@ -593,6 +593,18 @@ func encodeAnalyze(kind string, payload any) ([]byte, error) {
 			}
 		}
 		return buf.Bytes(), enc.Close()
+	case "def_use":
+		items, _ := payload.([]defUseItem)
+		enc := newGCX(&buf, "analyze.def_use",
+			[]string{"symbol", "var", "use_line", "use_text", "def_lines"},
+			"count", fmt.Sprintf("%d", len(items)),
+		)
+		for _, it := range items {
+			if err := enc.WriteRow(it.Symbol, it.Var, it.UseLine, it.UseText, it.DefLines); err != nil {
+				return nil, err
+			}
+		}
+		return buf.Bytes(), enc.Close()
 	case "channel_ops":
 		items, _ := payload.([]channelOpItem)
 		enc := newGCX(&buf, "analyze.channel_ops",
