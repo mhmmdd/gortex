@@ -2593,16 +2593,18 @@ func (idx *Indexer) IndexCtx(ctx context.Context, root string) (result *IndexRes
 
 	// Persist the Merkle baseline so the next incremental pass diffs
 	// against content hashes rather than re-indexing the whole repo.
+	workspaceFP := ""
 	if idx.merkleEnabled() {
 		paths := make([]string, len(files))
 		for i, wf := range files {
 			paths[i] = wf.path
 		}
-		idx.saveMerkleBaseline(absRoot, paths)
+		workspaceFP = idx.saveMerkleBaseline(absRoot, paths)
 	}
 	idx.indexGen.Add(1) // invalidate the trigram search cache
 
 	nodes, edges := idx.repoNodeEdgeCount()
+	idx.persistRepoIndexState(diskTarget, absRoot, workspaceFP, nodes, edges)
 	result = &IndexResult{
 		NodeCount:        nodes,
 		EdgeCount:        edges,
