@@ -113,6 +113,7 @@ type changeEnvelope struct {
 	VerificationCommand string             `json:"verification_command,omitempty"`
 	StopCondition       string             `json:"stop_condition,omitempty"`
 	EditStrategy        *editStrategy      `json:"edit_strategy,omitempty"`
+	APISurface          []apiSurfaceEntry  `json:"api_surface,omitempty"`
 }
 
 // prediction is the normalised PREDICT-stage result. step is non-nil only for
@@ -120,6 +121,7 @@ type changeEnvelope struct {
 // fill blast/impact from the change set without an edit to apply.
 type prediction struct {
 	source       string
+	lens         string
 	changed      []changedSymbolRef
 	changedIDs   []string
 	nodes        []*graph.Node
@@ -164,18 +166,25 @@ func (s *Server) lowerChange(ctx context.Context, req mcp.CallToolRequest) (*pre
 		}
 	}
 
+	var p *prediction
+	var err error
 	switch source {
 	case "edit":
-		return s.lowerEditSource(ctx, req)
+		p, err = s.lowerEditSource(ctx, req)
 	case "ranges":
-		return s.lowerRangeSource(ctx, req)
+		p, err = s.lowerRangeSource(ctx, req)
 	case "symbols":
-		return s.lowerSymbolSource(ctx, req)
+		p, err = s.lowerSymbolSource(ctx, req)
 	case "diff":
-		return s.lowerDiffSource(ctx, req)
+		p, err = s.lowerDiffSource(ctx, req)
 	default:
 		return nil, fmt.Errorf("unknown source %q (want auto|edit|diff|symbols|ranges)", source)
 	}
+	if err != nil {
+		return nil, err
+	}
+	p.lens = strings.ToLower(strings.TrimSpace(req.GetString("lens", "")))
+	return p, nil
 }
 
 // lowerEditSource runs a real speculative simulation of a WorkspaceEdit.
@@ -597,6 +606,23 @@ func (s *Server) assembleEnvelope(p *prediction, violations []analysis.GuardViol
 		verdict = escalate(verdict, verdictWarn)
 	}
 
+	// Co-change omissions: files this set historically moves with but left out.
+	for _, r := range s.coChangeOmissions(p.touchedFiles) {
+		reasons = append(reasons, r)
+		verdict = escalate(verdict, verdictForSeverity(r.Severity))
+	}
+
+	// API-drift lens: focus the verdict on the public surface and its consumers.
+	var apiSurface []apiSurfaceEntry
+	if p.lens == "api" {
+		var apiReasons []changeReason
+		apiReasons, apiSurface = s.apiDriftReasons(p)
+		for _, r := range apiReasons {
+			reasons = append(reasons, r)
+			verdict = escalate(verdict, verdictForSeverity(r.Severity))
+		}
+	}
+
 	verCmd := buildVerificationCommand(p)
 	classification := classifyChange(p)
 
@@ -610,6 +636,7 @@ func (s *Server) assembleEnvelope(p *prediction, violations []analysis.GuardViol
 		VerificationCommand: verCmd,
 		StopCondition:       buildStopCondition(p, risk, verCmd),
 		EditStrategy:        s.buildEditStrategy(p),
+		APISurface:          apiSurface,
 	}
 	if p.impact != nil {
 		env.Blast = map[string]any{
