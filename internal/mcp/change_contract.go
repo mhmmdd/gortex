@@ -609,6 +609,7 @@ func (s *Server) assembleEnvelope(p *prediction, violations []analysis.GuardViol
 		Risk:                risk,
 		VerificationCommand: verCmd,
 		StopCondition:       buildStopCondition(p, risk, verCmd),
+		EditStrategy:        s.buildEditStrategy(p),
 	}
 	if p.impact != nil {
 		env.Blast = map[string]any{
