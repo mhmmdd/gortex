@@ -34,6 +34,28 @@ type GuardsConfig struct {
 	Rules []GuardRule `mapstructure:"rules" yaml:"rules,omitempty"`
 }
 
+// EventRule is one declarative event-boundary / dispatch-guard constraint over
+// the pub/sub graph: which paths may produce or consume a topic, whether a
+// produced topic must have a consumer, and which paths are forbidden from it.
+type EventRule struct {
+	Name            string   `mapstructure:"name"             yaml:"name,omitempty"`
+	Topic           string   `mapstructure:"topic"            yaml:"topic,omitempty"`            // glob on event/topic name; empty = any
+	Producer        string   `mapstructure:"producer"         yaml:"producer,omitempty"`         // path glob allowed to produce
+	Consumer        string   `mapstructure:"consumer"         yaml:"consumer,omitempty"`         // path glob allowed to consume
+	RequireConsumer bool     `mapstructure:"require_consumer" yaml:"require_consumer,omitempty"` // a produced topic must have a consumer
+	Forbid          []string `mapstructure:"forbid"           yaml:"forbid,omitempty"`           // path globs forbidden to produce / consume
+	Severity        string   `mapstructure:"severity"         yaml:"severity,omitempty"`
+	Message         string   `mapstructure:"message"          yaml:"message,omitempty"`
+}
+
+// EventsConfig is the `events:` block of .gortex.yaml — declarative
+// event-boundary rules over the pub/sub graph (EdgeEmits / EdgeProducesTopic /
+// EdgeListensOn / EdgeConsumesTopic), evaluated as a change_contract rule
+// family.
+type EventsConfig struct {
+	Rules []EventRule `mapstructure:"rules" yaml:"rules,omitempty"`
+}
+
 // ArchitectureConfig is the declarative architecture-rules block of
 // .gortex.yaml — the top-level `architecture:` key. It promotes the
 // flat guards: list into named layers with directional allow/deny
@@ -437,6 +459,9 @@ type Config struct {
 	// by default; the flat Guards list above keeps working when it is
 	// unset.
 	Architecture ArchitectureConfig `mapstructure:"architecture" yaml:"architecture,omitempty"`
+	// Events is the declarative event-boundary rule family — pub/sub
+	// producer/consumer path constraints, evaluated by change_contract.
+	Events EventsConfig `mapstructure:"events" yaml:"events,omitempty"`
 	// Artifacts is the non-code knowledge manifest — schemas, API
 	// specs, infra configs, and ADRs surfaced as KindArtifact nodes.
 	Artifacts []ArtifactEntry `mapstructure:"artifacts" yaml:"artifacts,omitempty"`

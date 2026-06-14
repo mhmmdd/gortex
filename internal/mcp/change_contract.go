@@ -362,7 +362,11 @@ func (s *Server) ruleFamilies() []analysis.RuleFamily {
 // architecture pair — populated as families (event boundaries, taint) come
 // online.
 func (s *Server) extraRuleFamilies() []analysis.RuleFamily {
-	return nil
+	var fams []analysis.RuleFamily
+	if len(s.eventRules) > 0 {
+		fams = append(fams, analysis.EventBoundaryFamily{Rules: s.eventRules})
+	}
+	return fams
 }
 
 // evaluateChange runs every registered rule family over the changed set.
