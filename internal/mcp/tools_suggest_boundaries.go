@@ -52,7 +52,6 @@ func (s *Server) handleSuggestBoundaries(ctx context.Context, req mcp.CallToolRe
 
 	usedNames := make(map[string]bool)
 	commToLayer := make(map[string]string) // community ID -> layer name
-	prefixOf := make(map[string]string)    // layer name -> path prefix
 	var cands []cand
 	for _, ci := range sorted {
 		if len(cands) >= limit {
@@ -66,7 +65,6 @@ func (s *Server) handleSuggestBoundaries(ctx context.Context, req mcp.CallToolRe
 		name := uniqueLayerName(prefix, c.Label, usedNames)
 		usedNames[name] = true
 		commToLayer[c.ID] = name
-		prefixOf[name] = prefix
 		cands = append(cands, cand{comm: ci, prefix: prefix, name: name, size: c.Size})
 	}
 	if len(cands) == 0 {
@@ -130,11 +128,9 @@ func commonDirPrefix(files []string) string {
 	}
 	var segLists [][]string
 	for _, f := range files {
-		dir := f
+		dir := ""
 		if i := strings.LastIndex(f, "/"); i >= 0 {
 			dir = f[:i]
-		} else {
-			dir = ""
 		}
 		segLists = append(segLists, strings.Split(dir, "/"))
 	}
@@ -199,8 +195,8 @@ func renderArchitectureYAML(layers []suggestedLayer) string {
 	var b strings.Builder
 	b.WriteString("architecture:\n  layers:\n")
 	for _, l := range layers {
-		b.WriteString(fmt.Sprintf("    %s:\n", l.Name))
-		b.WriteString(fmt.Sprintf("      paths: [%q]\n", l.Paths[0]))
+		fmt.Fprintf(&b, "    %s:\n", l.Name)
+		fmt.Fprintf(&b, "      paths: [%q]\n", l.Paths[0])
 		if len(l.Allow) == 0 {
 			b.WriteString("      allow: []\n")
 			continue
@@ -209,7 +205,7 @@ func renderArchitectureYAML(layers []suggestedLayer) string {
 		for i, a := range l.Allow {
 			quoted[i] = fmt.Sprintf("%q", a)
 		}
-		b.WriteString(fmt.Sprintf("      allow: [%s]\n", strings.Join(quoted, ", ")))
+		fmt.Fprintf(&b, "      allow: [%s]\n", strings.Join(quoted, ", "))
 	}
 	return b.String()
 }
