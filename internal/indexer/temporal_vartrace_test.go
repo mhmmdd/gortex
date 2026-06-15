@@ -197,3 +197,45 @@ func setupWorker(w Worker) {
 		stub.To[:len("unresolved::temporal::")] == "unresolved::temporal::",
 		"a non-statically-traceable dispatch var must stay unresolved; got To=%s", stub.To)
 }
+
+// TestTemporalE2E_VarTrace_TupleLiteral guards the parallel-assignment case:
+// `x, act := "ignored", "ChargeActivity"` must trace the value at the SAME
+// position as the dispatched variable (act -> "ChargeActivity"), not the
+// first right-hand expression. A position-blind trace would resolve to
+// "ignored" and leave the dispatch broken.
+func TestTemporalE2E_VarTrace_TupleLiteral(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "workflow.go"), `package wf
+
+import "go.temporal.io/sdk/workflow"
+
+func OrderWorkflow(ctx workflow.Context) error {
+	x, act := "ignored", "ChargeActivity"
+	_ = x
+	return workflow.ExecuteActivity(ctx, act, nil).Get(ctx, nil)
+}
+`)
+	writeFile(t, filepath.Join(dir, "activity.go"), `package wf
+
+import "context"
+
+func ChargeActivity(ctx context.Context) error { return nil }
+`)
+	writeFile(t, filepath.Join(dir, "main.go"), `package wf
+
+func setupWorker(w Worker) {
+	w.RegisterWorkflow(OrderWorkflow)
+	w.RegisterActivity(ChargeActivity)
+}
+`)
+	g := graph.New()
+	idx := newTestIndexer(g)
+	_, err := idx.Index(dir)
+	require.NoError(t, err)
+
+	activity := g.FindNodesByName("ChargeActivity")
+	require.Len(t, activity, 1)
+	stub := stubEdgeFrom(t, g, "OrderWorkflow")
+	assert.Equal(t, activity[0].ID, stub.To,
+		"parallel-assigned dispatch var must trace the value at its own position, not RHS[0]")
+}
