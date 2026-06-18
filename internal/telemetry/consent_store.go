@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -81,6 +82,30 @@ func clearBuffer(dir string) {
 		}
 	}
 	_ = os.Remove(filepath.Join(dir, lastSendFile))
+}
+
+// CachedConsentResolver returns a consent check that re-resolves at most once
+// per ttl, so a hot record path observes a `gortex telemetry on|off` toggle
+// within ttl without an os.ReadFile per event. It is the live resolver a
+// long-lived process hands to NewRecorderFunc. Safe for concurrent use.
+func CachedConsentResolver(dir string, ttl time.Duration) func() bool {
+	var (
+		mu        sync.Mutex
+		enabled   bool
+		checkedAt time.Time
+		valid     bool
+	)
+	return func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now()
+		if !valid || now.Sub(checkedAt) >= ttl {
+			enabled = ResolveConsent(LoadConsentConfig(dir), os.Getenv).Enabled
+			checkedAt = now
+			valid = true
+		}
+		return enabled
+	}
 }
 
 // MaybeFirstRunNotice prints a one-time, opt-in notice to w when the user has

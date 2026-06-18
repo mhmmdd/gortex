@@ -114,3 +114,53 @@ func TestRecorderDayRollover(t *testing.T) {
 		t.Errorf("day-19 counter = %d, want 1", d19.Counts["cli_command:b"])
 	}
 }
+
+func TestRecorderLiveConsentStopsRecording(t *testing.T) {
+	store := NewStore(t.TempDir())
+	enabled := true
+	r := NewRecorderFunc(func() bool { return enabled }, store)
+	r.now = fixedNow("2026-06-18")
+
+	r.Record("cli_command", "a")
+	r.Flush()
+	if got, _ := store.Load("2026-06-18"); got.Counts["cli_command:a"] != 1 {
+		t.Fatalf("enabled recorder did not record: %v", got.Counts)
+	}
+
+	// Flip consent off live: further records drop and a flush is a no-op, so a
+	// running daemon stops recording the moment the user disables telemetry.
+	enabled = false
+	if r.Enabled() {
+		t.Error("Enabled() should follow live consent (off)")
+	}
+	r.Record("cli_command", "b")
+	r.Flush()
+	if got, _ := store.Load("2026-06-18"); got.Counts["cli_command:b"] != 0 {
+		t.Errorf("recorder kept recording after consent flipped off: %v", got.Counts)
+	}
+}
+
+func TestCachedConsentResolver(t *testing.T) {
+	t.Setenv("GORTEX_TELEMETRY", "")
+	t.Setenv("DO_NOT_TRACK", "")
+	dir := t.TempDir()
+	if err := SaveConsent(dir, true, "test", nil); err != nil {
+		t.Fatal(err)
+	}
+	resolve := CachedConsentResolver(dir, 20*time.Millisecond)
+	if !resolve() {
+		t.Fatal("resolver should reflect persisted enabled=true")
+	}
+	// Flip persisted to off; within the TTL the cached (true) value persists.
+	if err := SaveConsent(dir, false, "test", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !resolve() {
+		t.Error("within TTL the cached value should persist")
+	}
+	// After the TTL elapses it re-reads → false.
+	time.Sleep(30 * time.Millisecond)
+	if resolve() {
+		t.Error("after TTL the resolver should re-read and return false")
+	}
+}

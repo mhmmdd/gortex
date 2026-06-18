@@ -7,13 +7,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/zzet/gortex/internal/agents"
 	"github.com/zzet/gortex/internal/agents/claudecode"
 	"github.com/zzet/gortex/internal/daemon"
+	"github.com/zzet/gortex/internal/platform"
 	"github.com/zzet/gortex/internal/progress"
+	"github.com/zzet/gortex/internal/telemetry"
 )
 
 // Install-only flags. Repo-local `gortex init` has its own set —
@@ -35,6 +38,8 @@ var (
 	installStartDaemon bool
 	installTrackRepo   bool
 	installTrackPath   string
+	installTelemetry   bool
+	installNoTelemetry bool
 )
 
 var installCmd = &cobra.Command{
@@ -69,6 +74,8 @@ func init() {
 	installCmd.Flags().BoolVar(&installStartDaemon, "start", false, "start the daemon immediately after setup (detached)")
 	installCmd.Flags().BoolVar(&installTrackRepo, "track", false, "track a repository with the daemon after setup")
 	installCmd.Flags().StringVar(&installTrackPath, "track-path", ".", "repository to track when --track is set (default: current directory)")
+	installCmd.Flags().BoolVar(&installTelemetry, "telemetry", false, "opt in to anonymous usage telemetry (tool/command counts only; off by default)")
+	installCmd.Flags().BoolVar(&installNoTelemetry, "no-telemetry", false, "explicitly opt out of anonymous usage telemetry")
 
 	rootCmd.AddCommand(installCmd)
 }
@@ -89,6 +96,21 @@ func runInstall(cmd *cobra.Command, _ []string) (err error) {
 		return fmt.Errorf("gortex install needs a home directory; $HOME is empty")
 	}
 
+	// Machine-global telemetry choice. An explicit --telemetry / --no-telemetry
+	// flag wins; otherwise seed the wizard toggle from the PERSISTED choice
+	// only (never the env-folded resolution), so a transient GORTEX_TELEMETRY /
+	// DO_NOT_TRACK in this shell can't be laundered into a durable opt-in or
+	// silently flip a saved one. Unset persisted choice → default off.
+	telemetryFlagSet := cmd.Flags().Changed("telemetry") || cmd.Flags().Changed("no-telemetry")
+	if installNoTelemetry {
+		installTelemetry = false
+	}
+	if !telemetryFlagSet {
+		if persisted := telemetry.LoadConsentConfig(platform.TelemetryDir()); persisted.Enabled != nil {
+			installTelemetry = *persisted.Enabled
+		}
+	}
+
 	// Interactive wizard — same shape as `gortex init -i`, just sourced from
 	// the install* globals and writing under Home instead of Root. The
 	// wizard mutates the install* globals (agents list, hooks, hook-mode) so
@@ -102,6 +124,16 @@ func runInstall(cmd *cobra.Command, _ []string) (err error) {
 		if cancelled {
 			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "  cancelled — no changes made.")
 			return nil
+		}
+	}
+
+	// Persist the telemetry choice when the user expressed one — an explicit
+	// flag, or the interactive wizard (whose toggle wrote back into
+	// installTelemetry). A non-interactive run with no flag leaves the opt-in
+	// default (off) and the first-run notice untouched.
+	if (telemetryFlagSet || wantWizard) && !installDryRun {
+		if serr := telemetry.SaveConsent(platform.TelemetryDir(), installTelemetry, "installer", time.Now); serr != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[gortex install] warning: could not save telemetry choice: %v\n", serr)
 		}
 	}
 

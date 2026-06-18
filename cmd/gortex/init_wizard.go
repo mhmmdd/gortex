@@ -109,11 +109,13 @@ type initWizardModel struct {
 	cancelled bool
 
 	// Resolved choices — read by the caller after Run() returns.
-	pickedAgents []string
-	hooks        bool
-	hookMode     string
-	analyze      bool
-	skills       bool
+	pickedAgents  []string
+	hooks         bool
+	hookMode      string
+	analyze       bool
+	skills        bool
+	telemetry     bool
+	showTelemetry bool
 }
 
 // initialDetection runs adapter.Detect for every registered adapter so the
@@ -186,16 +188,29 @@ func newInitWizardModel(rootPath string, registered []agents.Adapter, detected m
 		},
 	}
 
+	// Install-only: append the anonymous-telemetry toggle as the last toggle
+	// (kept last so the hooks/analyze/skills positional read-back is stable).
+	if defaults.showTelemetry {
+		opts.Toggles = append(opts.Toggles, tui.Toggle{
+			Label:  "Anonymous telemetry",
+			Hint:   "tool/command counts only — off by default",
+			Detail: "no code, paths, or names; toggle later with `gortex telemetry on|off`",
+			On:     defaults.telemetry,
+		})
+	}
+
 	return &initWizardModel{
-		step:      stepAgents,
-		checklist: cl,
-		options:   opts,
-		title:     "gortex init",
-		rootPath:  rootPath,
-		hooks:     defaults.hooks,
-		hookMode:  defaults.hookMode,
-		analyze:   defaults.analyze,
-		skills:    defaults.skills,
+		step:          stepAgents,
+		checklist:     cl,
+		options:       opts,
+		title:         "gortex init",
+		rootPath:      rootPath,
+		hooks:         defaults.hooks,
+		hookMode:      defaults.hookMode,
+		analyze:       defaults.analyze,
+		skills:        defaults.skills,
+		telemetry:     defaults.telemetry,
+		showTelemetry: defaults.showTelemetry,
 	}
 }
 
@@ -207,6 +222,11 @@ type initDefaults struct {
 	hookMode string
 	analyze  bool
 	skills   bool
+	// telemetry seeds the (install-only) anonymous-telemetry toggle;
+	// showTelemetry adds that toggle to the options panel. `gortex init`
+	// leaves both zero so the toggle never appears there.
+	telemetry     bool
+	showTelemetry bool
 }
 
 // hookModeIndex maps a hook-mode value to its Select index, defaulting to
@@ -365,6 +385,9 @@ func (m *initWizardModel) collectChoices() {
 		m.hooks = m.options.Toggles[0].On
 		m.analyze = m.options.Toggles[1].On
 		m.skills = m.options.Toggles[2].On
+	}
+	if m.showTelemetry && len(m.options.Toggles) >= 4 {
+		m.telemetry = m.options.Toggles[3].On
 	}
 	if len(m.options.Selects) >= 1 {
 		m.hookMode = m.options.Selects[0].Value()

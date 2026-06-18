@@ -49,6 +49,11 @@ func runInstallWizard(cmd interface {
 		// won't touch the project.
 		analyze: false,
 		skills:  false,
+		// Machine-global anonymous telemetry — install is the place to choose
+		// it. Seeded from the current setting (installTelemetry was primed from
+		// the persisted choice in runInstall).
+		telemetry:     installTelemetry,
+		showTelemetry: true,
 	}
 	model := newInstallWizardModel(home, registered, detected, defaults)
 
@@ -69,6 +74,7 @@ func runInstallWizard(cmd interface {
 	// Pour wizard picks back into install* globals.
 	installHooks = m.hooks
 	installHookMode = m.hookMode
+	installTelemetry = m.telemetry
 	if len(m.pickedAgents) > 0 {
 		installAgents = strings.Join(m.pickedAgents, ",")
 	}

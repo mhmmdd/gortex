@@ -21,7 +21,7 @@ const recorderFlushThreshold = 256
 //   - Fail-silent: recording is an in-memory map increment under a short mutex;
 //     disk errors on flush are swallowed, never retried, never surfaced.
 type Recorder struct {
-	enabled bool
+	consent func() bool
 	store   *Store
 	now     func() time.Time
 
@@ -31,12 +31,27 @@ type Recorder struct {
 	pending int
 }
 
-// NewRecorder builds a recorder for the resolved consent and store. When
-// consent is disabled it returns a non-nil recorder that drops everything, so
-// callers never need to special-case the off state.
+// NewRecorder builds a recorder with a fixed consent decision, captured once.
+// Suitable for a short-lived process (a single CLI command). When consent is
+// disabled it returns a non-nil recorder that drops everything, so callers
+// never need to special-case the off state.
 func NewRecorder(consent Consent, store *Store) *Recorder {
+	enabled := consent.Enabled
+	return NewRecorderFunc(func() bool { return enabled }, store)
+}
+
+// NewRecorderFunc builds a recorder whose consent is re-evaluated on every
+// record and flush via resolve. A long-lived process (the daemon) passes a
+// live resolver so it stops recording — and stops re-creating a buffer that
+// `gortex telemetry off` just cleared — the moment the user disables
+// telemetry, instead of freezing the decision at startup. A nil resolve means
+// never enabled. Use CachedConsentResolver to bound the resolver's I/O.
+func NewRecorderFunc(resolve func() bool, store *Store) *Recorder {
+	if resolve == nil {
+		resolve = func() bool { return false }
+	}
 	return &Recorder{
-		enabled: consent.Enabled,
+		consent: resolve,
 		store:   store,
 		now:     time.Now,
 		counts:  map[string]int{},
@@ -48,7 +63,7 @@ func NewRecorder(consent Consent, store *Store) *Recorder {
 // is not allow-listed. Never performs I/O on the caller's path beyond an
 // occasional threshold flush.
 func (r *Recorder) Record(key, dim string) {
-	if r == nil || !r.enabled || r.store == nil {
+	if r == nil || r.store == nil || !r.consent() {
 		return
 	}
 	name, ok := metricName(key, dim)
@@ -76,7 +91,7 @@ func (r *Recorder) Record(key, dim string) {
 // it on shutdown (and periodically). No-op when disabled or empty; a store
 // error is swallowed — telemetry must never disrupt the process.
 func (r *Recorder) Flush() {
-	if r == nil || !r.enabled || r.store == nil {
+	if r == nil || r.store == nil || !r.consent() {
 		return
 	}
 	r.mu.Lock()
@@ -85,7 +100,7 @@ func (r *Recorder) Flush() {
 }
 
 // Enabled reports whether this recorder will record anything.
-func (r *Recorder) Enabled() bool { return r != nil && r.enabled }
+func (r *Recorder) Enabled() bool { return r != nil && r.consent() }
 
 // flushLocked merges the pending counts into the day's store file and clears
 // the buffer. The caller must hold r.mu.

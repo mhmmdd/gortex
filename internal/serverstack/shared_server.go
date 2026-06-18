@@ -1,6 +1,7 @@
 package serverstack
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	gortexmcp "github.com/zzet/gortex/internal/mcp"
 	"github.com/zzet/gortex/internal/parser"
 	"github.com/zzet/gortex/internal/parser/languages"
+	"github.com/zzet/gortex/internal/platform"
 	"github.com/zzet/gortex/internal/query"
 	"github.com/zzet/gortex/internal/savings"
 	"github.com/zzet/gortex/internal/semantic"
@@ -26,6 +28,7 @@ import (
 	"github.com/zzet/gortex/internal/semantic/lsp"
 	"github.com/zzet/gortex/internal/semantic/scip"
 	"github.com/zzet/gortex/internal/semantic/tstypes"
+	"github.com/zzet/gortex/internal/telemetry"
 )
 
 // Lifecycle selects the backend default, whether warm-restart/snapshot
@@ -156,6 +159,44 @@ func (s *SharedServer) Close() error {
 		s.cleanup[i]()
 	}
 	return nil
+}
+
+// telemetrySendInterval bounds how often the daemon flushes the in-memory
+// usage recorder and attempts to send completed daily aggregates. Long, since
+// only whole UTC days are ever sent and MaybeSend self-limits to once per day.
+const telemetrySendInterval = 6 * time.Hour
+
+// telemetryConsentTTL bounds how often the daemon recorder re-reads consent on
+// the hot record path — short enough that `gortex telemetry off` stops
+// recording promptly, long enough to avoid a consent-file read per tool call.
+const telemetryConsentTTL = 5 * time.Second
+
+// startTelemetrySender launches the daemon-only periodic flush-and-send loop
+// and returns a stop function for the cleanup chain. It re-resolves consent
+// each tick so `gortex telemetry off` stops transmission within one interval,
+// and is a complete no-op while GORTEX_TELEMETRY_ENDPOINT is unset.
+func startTelemetrySender(srv *gortexmcp.Server, store *telemetry.Store, dir, version string) func() {
+	sender := telemetry.NewSender(store, dir, version, os.Getenv)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		t := time.NewTicker(telemetrySendInterval)
+		defer t.Stop()
+		flushAndSend := func() {
+			srv.FlushTelemetry()
+			consent := telemetry.ResolveConsent(telemetry.LoadConsentConfig(dir), os.Getenv)
+			sender.MaybeSend(ctx, consent)
+		}
+		flushAndSend() // opportunistic send on startup
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				flushAndSend()
+			}
+		}
+	}()
+	return cancel
 }
 
 // NewSharedServer builds the whole server stack — graph.Store ->
@@ -476,6 +517,23 @@ func NewSharedServer(cfg SharedServerConfig) (*SharedServer, error) {
 	if semMgr := idx.SemanticManager(); semMgr != nil {
 		srv.SetSemanticManager(semMgr)
 		srv.SetLSPDiagnosticsBroadcasting()
+	}
+
+	// Opt-in usage telemetry. Every entry point records (consent-gated and
+	// fail-silent — nothing happens unless the user enabled it); the daemon
+	// additionally flushes and sends completed daily aggregates on a long
+	// interval, dormant until GORTEX_TELEMETRY_ENDPOINT is configured. Both the
+	// record path (via a TTL-cached resolver) and the send path re-resolve
+	// consent live, so `gortex telemetry off` stops recording within
+	// telemetryConsentTTL and stops transmission within one send interval —
+	// rather than freezing the decision at startup.
+	teleDir := platform.TelemetryDir()
+	teleStore := telemetry.NewStore(teleDir)
+	srv.SetTelemetryRecorder(telemetry.NewRecorderFunc(
+		telemetry.CachedConsentResolver(teleDir, telemetryConsentTTL), teleStore))
+	s.cleanup = append(s.cleanup, func() { srv.FlushTelemetry() })
+	if cfg.Lifecycle == LifecycleDaemon {
+		s.cleanup = append(s.cleanup, startTelemetrySender(srv, teleStore, teleDir, cfg.Version))
 	}
 
 	// Side-stores. The HTTP path previously wired NONE of these; routing it
