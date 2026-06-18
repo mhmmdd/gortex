@@ -67,6 +67,12 @@ func (e *PHPExtractor) walkNode(
 	case "interface_declaration":
 		e.extractInterface(node, src, filePath, fileNode, result, seen)
 
+	case "trait_declaration":
+		e.extractTrait(node, src, filePath, fileNode, result, seen)
+
+	case "enum_declaration":
+		e.extractEnum(node, src, filePath, fileNode, result, seen)
+
 	case "function_definition":
 		e.extractFunction(node, src, filePath, fileNode, result, seen)
 
@@ -178,21 +184,12 @@ func (e *PHPExtractor) extractClass(
 	annotationSeen := map[string]bool{}
 	emitPHPAnnotationEdgesFromAttrs(collectPhpAttributes(node, src), id, filePath, result, annotationSeen)
 
-	// Extract methods inside the class body.
+	// Extract methods, constants, properties, and trait uses inside the body.
 	body := e.findChildByType(node, "declaration_list")
 	if body == nil {
 		return
 	}
-	methodNodes := make(map[string]*sitter.Node) // name → method_declaration node
-	for i := 0; i < int(body.NamedChildCount()); i++ {
-		child := body.NamedChild(i)
-		if child.Type() == "method_declaration" {
-			if n := e.findChildByFieldName(child, "name"); n != nil {
-				methodNodes[n.Content(src)] = child
-			}
-			e.extractMethod(child, src, filePath, fileNode, result, seen, className)
-		}
-	}
+	methodNodes := e.extractPhpMembers(body, src, filePath, fileNode, result, seen, className, id)
 	// Laravel-specific dispatch passes — run after methods are in the
 	// graph so action-method IDs are resolvable by name:
 	//   1. Controller middleware: `$this->middleware(X)->only([...])`
@@ -239,17 +236,297 @@ func (e *PHPExtractor) extractInterface(
 		From: fileNode.ID, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: startLine,
 	})
 
-	// Extract method signatures inside the interface body.
+	// Extract method signatures and constants inside the interface body.
 	body := e.findChildByType(node, "declaration_list")
 	if body == nil {
 		return
 	}
+	e.extractPhpMembers(body, src, filePath, fileNode, result, seen, ifaceName, id)
+}
+
+// extractPhpMembers walks a class/trait/interface/enum body, emitting methods,
+// class constants, properties, trait-use edges, and enum cases. Returns the
+// method_declaration nodes by name for the framework-dispatch post-passes.
+func (e *PHPExtractor) extractPhpMembers(
+	body *sitter.Node, src []byte,
+	filePath string, fileNode *graph.Node,
+	result *parser.ExtractionResult, seen map[string]bool,
+	ownerName, ownerID string,
+) map[string]*sitter.Node {
+	methodNodes := make(map[string]*sitter.Node)
 	for i := 0; i < int(body.NamedChildCount()); i++ {
 		child := body.NamedChild(i)
-		if child.Type() == "method_declaration" {
-			e.extractMethod(child, src, filePath, fileNode, result, seen, ifaceName)
+		switch child.Type() {
+		case "method_declaration":
+			if n := e.findChildByFieldName(child, "name"); n != nil {
+				methodNodes[n.Content(src)] = child
+			}
+			e.extractMethod(child, src, filePath, fileNode, result, seen, ownerName)
+		case "const_declaration":
+			e.extractPhpClassConst(child, src, filePath, fileNode, result, seen, ownerName, ownerID)
+		case "property_declaration":
+			e.extractPhpProperty(child, src, filePath, fileNode, result, seen, ownerName, ownerID)
+		case "use_declaration":
+			e.extractPhpTraitUse(child, src, filePath, ownerID, result)
+		case "enum_case":
+			e.extractPhpEnumCase(child, src, filePath, fileNode, result, seen, ownerName, ownerID)
 		}
 	}
+	return methodNodes
+}
+
+// extractTrait emits a trait as a navigable type plus all its members; a class
+// that `use`s the trait gains a trait-composition edge (see extractPhpTraitUse).
+func (e *PHPExtractor) extractTrait(
+	node *sitter.Node, src []byte,
+	filePath string, fileNode *graph.Node,
+	result *parser.ExtractionResult, seen map[string]bool,
+) {
+	nameNode := e.findChildByFieldName(node, "name")
+	if nameNode == nil {
+		return
+	}
+	name := nameNode.Content(src)
+	id := filePath + "::" + name
+	if seen[id] {
+		return
+	}
+	seen[id] = true
+	startLine := int(node.StartPoint().Row) + 1
+	meta := map[string]any{"visibility": VisibilityPublic, "kind": "trait"}
+	if doc := ExtractDocAbove(src, int(node.StartPoint().Row), DocLangBlockStar); doc != "" {
+		meta["doc"] = doc
+	}
+	result.Nodes = append(result.Nodes, &graph.Node{
+		ID: id, Kind: graph.KindType, Name: name,
+		FilePath: filePath, StartLine: startLine, EndLine: int(node.EndPoint().Row) + 1,
+		Language: "php", Meta: meta,
+	})
+	result.Edges = append(result.Edges, &graph.Edge{
+		From: fileNode.ID, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: startLine,
+	})
+	if body := e.findChildByType(node, "declaration_list"); body != nil {
+		e.extractPhpMembers(body, src, filePath, fileNode, result, seen, name, id)
+	}
+}
+
+// extractEnum emits a PHP enum (cases, backing type, and methods).
+func (e *PHPExtractor) extractEnum(
+	node *sitter.Node, src []byte,
+	filePath string, fileNode *graph.Node,
+	result *parser.ExtractionResult, seen map[string]bool,
+) {
+	nameNode := e.findChildByFieldName(node, "name")
+	if nameNode == nil {
+		return
+	}
+	name := nameNode.Content(src)
+	id := filePath + "::" + name
+	if seen[id] {
+		return
+	}
+	seen[id] = true
+	startLine := int(node.StartPoint().Row) + 1
+	meta := map[string]any{"visibility": VisibilityPublic, "kind": "enum"}
+	if bt := e.findChildByType(node, "primitive_type"); bt != nil {
+		meta["backing_type"] = strings.TrimSpace(bt.Content(src))
+	}
+	if doc := ExtractDocAbove(src, int(node.StartPoint().Row), DocLangBlockStar); doc != "" {
+		meta["doc"] = doc
+	}
+	result.Nodes = append(result.Nodes, &graph.Node{
+		ID: id, Kind: graph.KindType, Name: name,
+		FilePath: filePath, StartLine: startLine, EndLine: int(node.EndPoint().Row) + 1,
+		Language: "php", Meta: meta,
+	})
+	result.Edges = append(result.Edges, &graph.Edge{
+		From: fileNode.ID, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: startLine,
+	})
+	if body := e.findChildByType(node, "enum_declaration_list"); body != nil {
+		e.extractPhpMembers(body, src, filePath, fileNode, result, seen, name, id)
+	}
+}
+
+// extractPhpClassConst emits each `const NAME = ...` in a class/interface/enum
+// body as a class-scoped constant member.
+func (e *PHPExtractor) extractPhpClassConst(
+	node *sitter.Node, src []byte,
+	filePath string, fileNode *graph.Node,
+	result *parser.ExtractionResult, seen map[string]bool,
+	ownerName, ownerID string,
+) {
+	vis := phpMemberVisibility(node, src)
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		ce := node.NamedChild(i)
+		if ce.Type() != "const_element" {
+			continue
+		}
+		nameNode := e.findChildByType(ce, "name")
+		if nameNode == nil {
+			continue
+		}
+		name := nameNode.Content(src)
+		line := int(ce.StartPoint().Row) + 1
+		id, ok := disambiguateID(seen, filePath+"::"+ownerName+"."+name, line)
+		if !ok {
+			continue
+		}
+		result.Nodes = append(result.Nodes, &graph.Node{
+			ID: id, Kind: graph.KindConstant, Name: name,
+			FilePath: filePath, StartLine: line, EndLine: line, Language: "php",
+			Meta: map[string]any{"receiver": ownerName, "visibility": vis},
+		})
+		result.Edges = append(result.Edges, &graph.Edge{
+			From: fileNode.ID, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: line,
+		})
+		result.Edges = append(result.Edges, &graph.Edge{
+			From: id, To: ownerID, Kind: graph.EdgeMemberOf, FilePath: filePath, Line: line,
+		})
+	}
+}
+
+// extractPhpProperty emits each typed property in a class/trait body as a field.
+func (e *PHPExtractor) extractPhpProperty(
+	node *sitter.Node, src []byte,
+	filePath string, fileNode *graph.Node,
+	result *parser.ExtractionResult, seen map[string]bool,
+	ownerName, ownerID string,
+) {
+	vis := phpMemberVisibility(node, src)
+	propType := phpPropertyType(node, src)
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		pe := node.NamedChild(i)
+		if pe.Type() != "property_element" {
+			continue
+		}
+		vn := e.findChildByType(pe, "variable_name")
+		if vn == nil {
+			continue
+		}
+		nameNode := e.findChildByType(vn, "name")
+		if nameNode == nil {
+			continue
+		}
+		name := nameNode.Content(src)
+		line := int(pe.StartPoint().Row) + 1
+		id, ok := disambiguateID(seen, filePath+"::"+ownerName+"."+name, line)
+		if !ok {
+			continue
+		}
+		meta := map[string]any{"receiver": ownerName, "visibility": vis}
+		if propType != "" {
+			meta["field_type"] = propType
+		}
+		result.Nodes = append(result.Nodes, &graph.Node{
+			ID: id, Kind: graph.KindField, Name: name,
+			FilePath: filePath, StartLine: line, EndLine: line, Language: "php", Meta: meta,
+		})
+		result.Edges = append(result.Edges, &graph.Edge{
+			From: fileNode.ID, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: line,
+		})
+		result.Edges = append(result.Edges, &graph.Edge{
+			From: id, To: ownerID, Kind: graph.EdgeMemberOf, FilePath: filePath, Line: line,
+		})
+	}
+}
+
+// extractPhpTraitUse emits a composition edge from a class to each trait it
+// `use`s — modeling trait composition the way a mixin is modeled, so the
+// composed members are reachable through the class.
+func (e *PHPExtractor) extractPhpTraitUse(node *sitter.Node, src []byte, filePath, ownerID string, result *parser.ExtractionResult) {
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		c := node.NamedChild(i)
+		if c.Type() != "name" && c.Type() != "qualified_name" {
+			continue
+		}
+		trait := strings.TrimSpace(c.Content(src))
+		if trait == "" {
+			continue
+		}
+		result.Edges = append(result.Edges, &graph.Edge{
+			From: ownerID, To: "unresolved::" + trait, Kind: graph.EdgeExtends,
+			FilePath: filePath, Line: int(c.StartPoint().Row) + 1,
+			Meta: map[string]any{"via": "trait"},
+		})
+	}
+}
+
+// extractPhpEnumCase emits one enum case as an enum member of its enum.
+func (e *PHPExtractor) extractPhpEnumCase(
+	node *sitter.Node, src []byte,
+	filePath string, fileNode *graph.Node,
+	result *parser.ExtractionResult, seen map[string]bool,
+	ownerName, ownerID string,
+) {
+	nameNode := e.findChildByType(node, "name")
+	if nameNode == nil {
+		return
+	}
+	name := nameNode.Content(src)
+	line := int(node.StartPoint().Row) + 1
+	id, ok := disambiguateID(seen, filePath+"::"+ownerName+"."+name, line)
+	if !ok {
+		return
+	}
+	result.Nodes = append(result.Nodes, &graph.Node{
+		ID: id, Kind: graph.KindEnumMember, Name: name,
+		FilePath: filePath, StartLine: line, EndLine: line, Language: "php",
+		Meta: map[string]any{"enum": ownerID},
+	})
+	result.Edges = append(result.Edges, &graph.Edge{
+		From: id, To: ownerID, Kind: graph.EdgeMemberOf, FilePath: filePath, Line: line,
+	})
+}
+
+// phpPropertyType returns the declared type of a property_declaration (the type
+// node before the first property_element), or "".
+func phpPropertyType(node *sitter.Node, src []byte) string {
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		c := node.NamedChild(i)
+		switch c.Type() {
+		case "primitive_type", "named_type", "union_type", "nullable_type", "intersection_type", "optional_type", "qualified_name":
+			return strings.TrimSpace(c.Content(src))
+		case "property_element":
+			return ""
+		}
+	}
+	return ""
+}
+
+// phpBuiltinType reports whether a type name is a PHP builtin (no node exists
+// for it, so it should not produce an unresolved type-reference edge).
+func phpBuiltinType(t string) bool {
+	switch strings.ToLower(strings.TrimPrefix(t, "?")) {
+	case "int", "integer", "string", "bool", "boolean", "float", "double",
+		"void", "array", "object", "mixed", "callable", "iterable",
+		"self", "static", "parent", "never", "null", "false", "true":
+		return true
+	}
+	return false
+}
+
+// phpReturnType returns the declared return type of a method/function (the type
+// node after formal_parameters, before the body), or "".
+func phpReturnType(node *sitter.Node, src []byte) string {
+	seenParams := false
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		c := node.NamedChild(i)
+		t := c.Type()
+		if t == "formal_parameters" {
+			seenParams = true
+			continue
+		}
+		if !seenParams {
+			continue
+		}
+		switch t {
+		case "primitive_type", "named_type", "union_type", "nullable_type", "intersection_type", "optional_type", "qualified_name", "bottom_type":
+			return strings.TrimSpace(c.Content(src))
+		case "compound_statement":
+			return ""
+		}
+	}
+	return ""
 }
 
 func (e *PHPExtractor) extractFunction(
@@ -273,6 +550,10 @@ func (e *PHPExtractor) extractFunction(
 	if doc := ExtractDocAbove(src, int(node.StartPoint().Row), DocLangBlockStar); doc != "" {
 		meta["doc"] = doc
 	}
+	rt := phpReturnType(node, src)
+	if rt != "" {
+		meta["return_type"] = rt
+	}
 	result.Nodes = append(result.Nodes, &graph.Node{
 		ID: id, Kind: graph.KindFunction, Name: funcName,
 		FilePath: filePath, StartLine: startLine, EndLine: endLine,
@@ -282,6 +563,11 @@ func (e *PHPExtractor) extractFunction(
 	result.Edges = append(result.Edges, &graph.Edge{
 		From: fileNode.ID, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: startLine,
 	})
+	if rt != "" && !phpBuiltinType(rt) {
+		result.Edges = append(result.Edges, &graph.Edge{
+			From: id, To: "unresolved::" + rt, Kind: graph.EdgeReturns, FilePath: filePath, Line: startLine,
+		})
+	}
 
 	// Extract call sites within the function body.
 	body := e.findChildByType(node, "compound_statement")
@@ -319,12 +605,23 @@ func (e *PHPExtractor) extractMethod(
 	if doc := ExtractDocAbove(src, int(node.StartPoint().Row), DocLangBlockStar); doc != "" {
 		meta["doc"] = doc
 	}
+	// Return type: stamped so the chained-factory resolver (helpers_chaintype)
+	// can infer `Foo::make()->...` receivers, and emitted as a return edge.
+	rt := phpReturnType(node, src)
+	if rt != "" {
+		meta["return_type"] = rt
+	}
 	result.Nodes = append(result.Nodes, &graph.Node{
 		ID: id, Kind: graph.KindMethod, Name: methodName,
 		FilePath: filePath, StartLine: startLine, EndLine: endLine,
 		Language: "php",
 		Meta:     meta,
 	})
+	if rt != "" && !phpBuiltinType(rt) {
+		result.Edges = append(result.Edges, &graph.Edge{
+			From: id, To: "unresolved::" + rt, Kind: graph.EdgeReturns, FilePath: filePath, Line: startLine,
+		})
+	}
 	annotationSeen := map[string]bool{}
 	emitPHPAnnotationEdgesFromAttrs(collectPhpAttributes(node, src), id, filePath, result, annotationSeen)
 	result.Edges = append(result.Edges, &graph.Edge{

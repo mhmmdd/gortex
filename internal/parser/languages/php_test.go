@@ -309,3 +309,68 @@ class Greeter {
 		t.Fatalf("helper.vis = %q", helper.Meta["visibility"])
 	}
 }
+
+// TestPHPExtractor_TraitsEnumsConstsProps is the C4 test: traits, enums with
+// cases, class constants, typed properties, method return types, and trait-use
+// composition edges are all extracted.
+func TestPHPExtractor_TraitsEnumsConstsProps(t *testing.T) {
+	src := []byte("<?php\n" +
+		"trait Greets { public function hi(): string { return 'hi'; } }\n" +
+		"enum Suit: string {\n" +
+		"  case Hearts = 'H';\n" +
+		"  case Spades = 'S';\n" +
+		"  public function color(): string { return 'red'; }\n" +
+		"}\n" +
+		"class Card {\n" +
+		"  use Greets;\n" +
+		"  public const MAX = 52;\n" +
+		"  private int $rank;\n" +
+		"  public function makeCard(): Card { return new Card(); }\n" +
+		"}\n")
+	res, err := NewPHPExtractor().Extract("c.php", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byID := map[string]*nodeForCount{}
+	for _, n := range res.Nodes {
+		byID[n.ID] = &nodeForCount{id: n.ID, name: n.Name}
+	}
+	kindByName := map[string]graph.NodeKind{}
+	rtByName := map[string]string{}
+	for _, n := range res.Nodes {
+		kindByName[n.Name] = n.Kind
+		if n.Meta != nil {
+			if rt, _ := n.Meta["return_type"].(string); rt != "" {
+				rtByName[n.Name] = rt
+			}
+		}
+	}
+
+	// Trait + enum are types; enum cases are enum members.
+	assert.Equal(t, graph.KindType, kindByName["Greets"], "trait Greets is a type")
+	assert.Equal(t, graph.KindType, kindByName["Suit"], "enum Suit is a type")
+	assert.Equal(t, graph.KindEnumMember, kindByName["Hearts"], "enum case is an enum member")
+	assert.Equal(t, graph.KindEnumMember, kindByName["Spades"])
+	// Class constant + typed property.
+	assert.Equal(t, graph.KindConstant, kindByName["MAX"], "class const MAX")
+	assert.Equal(t, graph.KindField, kindByName["rank"], "typed property rank")
+	// Method return types (a named return type beats the builtin path).
+	assert.Equal(t, "string", rtByName["hi"])
+	assert.Equal(t, "Card", rtByName["makeCard"], "non-builtin return type stamped for chaintype")
+
+	// Trait-use composition edge + a non-builtin return edge.
+	var sawTraitUse, sawReturnEdge bool
+	for _, e := range res.Edges {
+		if e.Kind == graph.EdgeExtends && e.From == "c.php::Card" && e.To == "unresolved::Greets" {
+			if v, _ := e.Meta["via"].(string); v == "trait" {
+				sawTraitUse = true
+			}
+		}
+		if e.Kind == graph.EdgeReturns && e.To == "unresolved::Card" {
+			sawReturnEdge = true
+		}
+	}
+	assert.True(t, sawTraitUse, "class should compose the trait via an extends edge")
+	assert.True(t, sawReturnEdge, "non-builtin return type should emit a return edge")
+}
