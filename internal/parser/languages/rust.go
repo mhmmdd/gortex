@@ -352,11 +352,10 @@ func (e *RustExtractor) emitFunction(m parser.QueryResult, filePath, fileID stri
 
 	implType := rustImplMethodReceiver(def.Node, src)
 	if implType != "" {
-		id := filePath + "::" + implType + "." + name
-		if seen[id] {
+		id, ok := disambiguateID(seen, filePath+"::"+implType+"."+name, startLine1)
+		if !ok {
 			return
 		}
-		seen[id] = true
 		meta := map[string]any{
 			"receiver":   implType,
 			"signature":  "fn " + name + "(...)",
@@ -392,11 +391,10 @@ func (e *RustExtractor) emitFunction(m parser.QueryResult, filePath, fileID stri
 
 	// Free function (or trait default-impl). Mirror the legacy
 	// rsQFunction pass — emit as KindFunction.
-	id := filePath + "::" + name
-	if seen[id] {
+	id, ok := disambiguateID(seen, filePath+"::"+name, startLine1)
+	if !ok {
 		return
 	}
-	seen[id] = true
 	meta := map[string]any{
 		"signature":  "fn " + name + "(...)",
 		"visibility": visibility,

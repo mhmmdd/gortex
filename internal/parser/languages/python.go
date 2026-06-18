@@ -383,11 +383,10 @@ func (e *PythonExtractor) emitFunction(m parser.QueryResult, filePath, fileID st
 
 	className := pyDirectClassParent(def.Node, src)
 	if className != "" {
-		id := filePath + "::" + className + "." + name
-		if seen[id] {
+		id, ok := disambiguateID(seen, filePath+"::"+className+"."+name, startLine1)
+		if !ok {
 			return
 		}
-		seen[id] = true
 		node := &graph.Node{
 			ID: id, Kind: graph.KindMethod, Name: name,
 			FilePath: filePath, StartLine: startLine1, EndLine: def.EndLine + 1,
@@ -421,11 +420,10 @@ func (e *PythonExtractor) emitFunction(m parser.QueryResult, filePath, fileID st
 	}
 
 	// Free function (top-level or nested in another function).
-	id := filePath + "::" + name
-	if seen[id] {
+	id, ok := disambiguateID(seen, filePath+"::"+name, startLine1)
+	if !ok {
 		return
 	}
-	seen[id] = true
 	meta := map[string]any{
 		"signature":  "def " + name + "(...)",
 		"visibility": visibility,

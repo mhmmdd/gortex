@@ -377,6 +377,10 @@ func (e *GoExtractor) Extract(filePath string, src []byte) (*parser.ExtractionRe
 	// by the Temporal wrapper detector to recognise a dispatch whose name
 	// is a forwarded parameter.
 	paramNamesByFunc := map[string]map[string]bool{}
+	// seenIDs: per-file node-ID collision set. Two declarations that build
+	// the same base ID (e.g. two func init()) both survive as distinct nodes
+	// via a line suffix instead of one silently overwriting the other.
+	seenIDs := map[string]bool{}
 	seenTypeName := map[string]bool{} // dedup when alias + typedef match same name
 
 	var calls []goDeferredCall
@@ -413,10 +417,10 @@ func (e *GoExtractor) Extract(filePath string, src []byte) (*parser.ExtractionRe
 			// No-op (the package name is not currently surfaced as a node).
 
 		case m.Captures["func.def"] != nil:
-			e.emitFunction(m, filePath, fileID, src, result, paramsByFunc, paramNamesByFunc, imports)
+			e.emitFunction(m, filePath, fileID, src, result, paramsByFunc, paramNamesByFunc, imports, seenIDs)
 
 		case m.Captures["method.def"] != nil:
-			e.emitMethod(m, filePath, fileID, src, result, paramsByFunc, paramNamesByFunc, imports)
+			e.emitMethod(m, filePath, fileID, src, result, paramsByFunc, paramNamesByFunc, imports, seenIDs)
 
 		case m.Captures["typedef.def"] != nil:
 			e.emitTypeDecl(m, filePath, fileID, src, result, seenTypeName)
@@ -1227,10 +1231,13 @@ func (e *GoExtractor) Extract(filePath string, src []byte) (*parser.ExtractionRe
 
 // --- Per-match emit helpers -----------------------------------------
 
-func (e *GoExtractor) emitFunction(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, paramsByFunc map[string]typeEnv, paramNamesByFunc map[string]map[string]bool, imports map[string]string) {
+func (e *GoExtractor) emitFunction(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, paramsByFunc map[string]typeEnv, paramNamesByFunc map[string]map[string]bool, imports map[string]string, seenIDs map[string]bool) {
 	name := m.Captures["func.name"].Text
 	def := m.Captures["func.def"]
-	id := filePath + "::" + name
+	id, ok := disambiguateID(seenIDs, filePath+"::"+name, def.StartLine+1)
+	if !ok {
+		return
+	}
 	if pc, ok := m.Captures["func.params"]; ok && pc != nil {
 		if names := extractGoParamNames(pc.Node, src); len(names) > 0 {
 			paramNamesByFunc[id] = names
@@ -1319,13 +1326,16 @@ func ownReceiverField(receiver, recvName string) (string, bool) {
 	return rest, true
 }
 
-func (e *GoExtractor) emitMethod(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, paramsByFunc map[string]typeEnv, paramNamesByFunc map[string]map[string]bool, imports map[string]string) {
+func (e *GoExtractor) emitMethod(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, paramsByFunc map[string]typeEnv, paramNamesByFunc map[string]map[string]bool, imports map[string]string, seenIDs map[string]bool) {
 	name := m.Captures["method.name"].Text
 	def := m.Captures["method.def"]
 	receiverText := m.Captures["method.receiver"].Text
 	receiverType := extractReceiverType(receiverText)
 
-	id := filePath + "::" + receiverType + "." + name
+	id, idOK := disambiguateID(seenIDs, filePath+"::"+receiverType+"."+name, def.StartLine+1)
+	if !idOK {
+		return
+	}
 	if paramsCap, ok := m.Captures["method.params"]; ok && paramsCap != nil {
 		if names := extractGoParamNames(paramsCap.Node, src); len(names) > 0 {
 			paramNamesByFunc[id] = names

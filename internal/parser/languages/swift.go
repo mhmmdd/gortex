@@ -348,11 +348,10 @@ func (e *SwiftExtractor) emitFunction(m parser.QueryResult, filePath, fileID str
 	}
 
 	if typeName, ok := findEnclosingSwiftType(typeRanges, startLine); ok {
-		id := filePath + "::" + typeName + "." + name
-		if seen[id] {
+		id, idOK := disambiguateID(seen, filePath+"::"+typeName+"."+name, def.StartLine+1)
+		if !idOK {
 			return
 		}
-		seen[id] = true
 		meta := map[string]any{
 			"receiver":   typeName,
 			"signature":  sig,
@@ -381,11 +380,10 @@ func (e *SwiftExtractor) emitFunction(m parser.QueryResult, filePath, fileID str
 		return
 	}
 
-	id := filePath + "::" + name
-	if seen[id] {
+	id, idOK := disambiguateID(seen, filePath+"::"+name, def.StartLine+1)
+	if !idOK {
 		return
 	}
-	seen[id] = true
 	meta := map[string]any{
 		"signature":  sig,
 		"visibility": visibility,

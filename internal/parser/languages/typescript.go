@@ -215,14 +215,19 @@ func (e *TypeScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 	// passes (emitInjectConsumers, emitDynamicModuleBindings,
 	// collectThisParamTypesInClass).
 	var classCarries []classCarry
+	// seenIDs: per-file node-ID collision set. Overload sets (multiple
+	// `function foo` signatures, overloaded class methods) build the same
+	// base ID; the disambiguator keeps each as a distinct node instead of
+	// letting the graph silently overwrite all but one.
+	seenIDs := map[string]bool{}
 
 	parser.EachMatch(qAll, root, src, func(m parser.QueryResult) {
 		switch {
 		case m.Captures["func.def"] != nil:
-			e.emitFunction(m, filePath, fileID, src, result)
+			e.emitFunction(m, filePath, fileID, src, result, seenIDs)
 
 		case m.Captures["arrow.def"] != nil:
-			if name := e.emitArrow(m, filePath, fileID, src, result); name != "" {
+			if name := e.emitArrow(m, filePath, fileID, src, result, seenIDs); name != "" {
 				arrowNames[name] = true
 			}
 
@@ -256,7 +261,7 @@ func (e *TypeScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 			e.emitReExport(m, filePath, fileID, src, result)
 
 		case m.Captures["method.def"] != nil:
-			registerObjMember(e.emitMethod(m, filePath, src, result, annotationSeen))
+			registerObjMember(e.emitMethod(m, filePath, src, result, annotationSeen, seenIDs))
 
 		case m.Captures["prop.def"] != nil:
 			e.emitClassProperty(m, filePath, src, result, annotationSeen)
@@ -539,10 +544,13 @@ func (e *TypeScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 
 // --- per-match emit helpers ------------------------------------------
 
-func (e *TypeScriptExtractor) emitFunction(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult) {
+func (e *TypeScriptExtractor) emitFunction(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, seenIDs map[string]bool) {
 	name := m.Captures["func.name"].Text
 	def := m.Captures["func.def"]
-	id := filePath + "::" + name
+	id, ok := disambiguateID(seenIDs, filePath+"::"+name, def.StartLine+1)
+	if !ok {
+		return
+	}
 	meta := map[string]any{"signature": fmt.Sprintf("function %s()", name)}
 	docRow, exported := tsDocStartRow(def)
 	if doc := ExtractDocAbove(src, docRow, DocLangBlockStar); doc != "" {
@@ -593,10 +601,13 @@ func tsFunctionBody(decl *sitter.Node) *sitter.Node {
 	return nil
 }
 
-func (e *TypeScriptExtractor) emitArrow(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult) string {
+func (e *TypeScriptExtractor) emitArrow(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, seenIDs map[string]bool) string {
 	name := m.Captures["arrow.name"].Text
 	def := m.Captures["arrow.def"]
-	id := filePath + "::" + name
+	id, ok := disambiguateID(seenIDs, filePath+"::"+name, def.StartLine+1)
+	if !ok {
+		return ""
+	}
 	meta := map[string]any{"signature": fmt.Sprintf("const %s = () =>", name)}
 	docRow, exported := tsDocStartRow(def)
 	if doc := ExtractDocAbove(src, docRow, DocLangBlockStar); doc != "" {
@@ -983,7 +994,7 @@ func (e *TypeScriptExtractor) emitReExport(m parser.QueryResult, filePath, fileI
 // The returned (owner, member, id) triple is non-empty only for an
 // object-literal shorthand and lets Extract register the member so a
 // later `owner.method()` call resolves to it directly.
-func (e *TypeScriptExtractor) emitMethod(m parser.QueryResult, filePath string, src []byte, result *parser.ExtractionResult, annotationSeen map[string]bool) (owner, member, id string) {
+func (e *TypeScriptExtractor) emitMethod(m parser.QueryResult, filePath string, src []byte, result *parser.ExtractionResult, annotationSeen map[string]bool, seenIDs map[string]bool) (owner, member, id string) {
 	def := m.Captures["method.def"]
 	if def.Node == nil {
 		return "", "", ""
@@ -999,7 +1010,10 @@ func (e *TypeScriptExtractor) emitMethod(m parser.QueryResult, filePath string, 
 	className := classNameNode.Content(src)
 	classID := filePath + "::" + className
 	name := m.Captures["method.name"].Text
-	methodID := classID + "." + name
+	methodID, methodOK := disambiguateID(seenIDs, classID+"."+name, def.StartLine+1)
+	if !methodOK {
+		return "", "", ""
+	}
 	node := &graph.Node{
 		ID: methodID, Kind: graph.KindMethod, Name: name,
 		FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,

@@ -230,11 +230,10 @@ func (e *RubyExtractor) emitMethod(m parser.QueryResult, filePath, fileID string
 
 	className := rubyDirectClassParent(def.Node, src)
 	if className != "" {
-		id := filePath + "::" + className + "." + name
-		if seen[id] {
+		id, ok := disambiguateID(seen, filePath+"::"+className+"."+name, startLine1)
+		if !ok {
 			return
 		}
-		seen[id] = true
 		meta := map[string]any{
 			"receiver":   className,
 			"signature":  "def " + name,
@@ -258,11 +257,10 @@ func (e *RubyExtractor) emitMethod(m parser.QueryResult, filePath, fileID string
 		return
 	}
 
-	id := filePath + "::" + name
-	if seen[id] {
+	id, ok := disambiguateID(seen, filePath+"::"+name, startLine1)
+	if !ok {
 		return
 	}
-	seen[id] = true
 	meta := map[string]any{
 		"signature":  "def " + name,
 		"visibility": VisibilityPublic,
@@ -293,11 +291,10 @@ func (e *RubyExtractor) emitSingletonMethod(m parser.QueryResult, filePath, file
 	if className == "" {
 		return
 	}
-	id := filePath + "::" + className + "." + name
-	if seen[id] {
+	id, ok := disambiguateID(seen, filePath+"::"+className+"."+name, startLine1)
+	if !ok {
 		return
 	}
-	seen[id] = true
 	result.Nodes = append(result.Nodes, &graph.Node{
 		ID: id, Kind: graph.KindMethod, Name: name,
 		FilePath: filePath, StartLine: startLine1, EndLine: def.EndLine + 1,

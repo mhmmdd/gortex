@@ -158,15 +158,19 @@ func (e *JavaScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 	// post-pass can disambiguate generic pub/sub method names (emit / on
 	// / send) and infer the broker transport.
 	var importPaths []string
+	// seenIDs: per-file node-ID collision set so two declarations sharing a
+	// base ID (a redefined function, a class method redeclared) both survive
+	// as distinct nodes instead of one overwriting the other.
+	seenIDs := map[string]bool{}
 
 	parser.EachMatch(e.qAll, root, src, func(m parser.QueryResult) {
 		switch {
 
 		case m.Captures["func.def"] != nil:
-			e.emitFunction(m, filePath, fileID, src, result)
+			e.emitFunction(m, filePath, fileID, src, result, seenIDs)
 
 		case m.Captures["arrow.def"] != nil:
-			e.emitArrow(m, filePath, fileID, src, result, arrowNames)
+			e.emitArrow(m, filePath, fileID, src, result, arrowNames, seenIDs)
 
 		case m.Captures["class.def"] != nil:
 			e.emitClass(m, filePath, fileID, result)
@@ -175,7 +179,7 @@ func (e *JavaScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 			registerObjMember(e.emitObjectArrowField(m, filePath, fileID, src, result))
 
 		case m.Captures["method.def"] != nil:
-			registerObjMember(e.emitMethod(m, filePath, fileID, src, result))
+			registerObjMember(e.emitMethod(m, filePath, fileID, src, result, seenIDs))
 
 		case m.Captures["classarrow.def"] != nil:
 			e.emitClassArrowField(m, filePath, fileID, src, result)
@@ -423,10 +427,13 @@ func (e *JavaScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 
 // --- Per-match emit helpers -----------------------------------------
 
-func (e *JavaScriptExtractor) emitFunction(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult) {
+func (e *JavaScriptExtractor) emitFunction(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, seenIDs map[string]bool) {
 	name := m.Captures["func.name"].Text
 	def := m.Captures["func.def"]
-	id := filePath + "::" + name
+	id, ok := disambiguateID(seenIDs, filePath+"::"+name, def.StartLine+1)
+	if !ok {
+		return
+	}
 	node := &graph.Node{
 		ID: id, Kind: graph.KindFunction, Name: name,
 		FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,
@@ -442,11 +449,14 @@ func (e *JavaScriptExtractor) emitFunction(m parser.QueryResult, filePath, fileI
 	}
 }
 
-func (e *JavaScriptExtractor) emitArrow(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, arrowNames map[string]bool) {
+func (e *JavaScriptExtractor) emitArrow(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, arrowNames map[string]bool, seenIDs map[string]bool) {
 	name := m.Captures["arrow.name"].Text
 	def := m.Captures["arrow.def"]
 	arrowNames[name] = true
-	id := filePath + "::" + name
+	id, ok := disambiguateID(seenIDs, filePath+"::"+name, def.StartLine+1)
+	if !ok {
+		return
+	}
 	node := &graph.Node{
 		ID: id, Kind: graph.KindFunction, Name: name,
 		FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,
@@ -515,7 +525,7 @@ func (e *JavaScriptExtractor) emitClass(m parser.QueryResult, filePath, fileID s
 // The returned (owner, member, id) triple is non-empty only for an
 // object-literal shorthand and lets Extract register the member so a
 // later `owner.method()` call resolves to it directly.
-func (e *JavaScriptExtractor) emitMethod(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult) (owner, member, id string) {
+func (e *JavaScriptExtractor) emitMethod(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, seenIDs map[string]bool) (owner, member, id string) {
 	def := m.Captures["method.def"]
 	classNode := findEnclosingJSContainer(def.Node, "class_declaration")
 	if classNode == nil {
@@ -528,7 +538,10 @@ func (e *JavaScriptExtractor) emitMethod(m parser.QueryResult, filePath, fileID 
 	className := nameNode.Content(src)
 	name := m.Captures["method.name"].Text
 	classID := filePath + "::" + className
-	methodID := filePath + "::" + className + "." + name
+	methodID, methodOK := disambiguateID(seenIDs, filePath+"::"+className+"."+name, def.StartLine+1)
+	if !methodOK {
+		return "", "", ""
+	}
 	node := &graph.Node{
 		ID: methodID, Kind: graph.KindMethod, Name: name,
 		FilePath: filePath, StartLine: def.StartLine + 1, EndLine: def.EndLine + 1,
