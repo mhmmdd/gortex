@@ -2099,7 +2099,7 @@ func (s *Server) handleSmartContext(ctx context.Context, req mcp.CallToolRequest
 	}
 
 	// Opt-in in-pack enrichment sections (off by default).
-	s.attachInPackSections(result, s.smartContextSections(req.GetArguments(), entryPoint))
+	s.attachInPackSections(result, s.smartContextSections(req.GetArguments(), entryPoint), relevantSymbols)
 
 	// Pack-root dedup: hash the assembled context pack. When the
 	// caller passes back the pack root it already holds and nothing

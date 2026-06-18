@@ -1483,6 +1483,33 @@ func encodeSmartContext(result map[string]any) ([]byte, error) {
 		}
 	}
 
+	if inPack, ok := result["in_pack"].(map[string]any); ok {
+		if cps, ok := inPack["call_paths"].([]map[string]any); ok && len(cps) > 0 {
+			cpEnc := newGCX(&buf, "smart_context.call_paths",
+				[]string{"root", "anchor", "length", "confidence", "nodes"},
+				"count", fmt.Sprintf("%d", len(cps)),
+			)
+			for _, cp := range cps {
+				nodes := ""
+				if ns, ok := cp["nodes"].([]string); ok {
+					nodes = strings.Join(ns, ">")
+				}
+				if err := cpEnc.WriteRow(
+					str(cp["root"]),
+					str(cp["anchor"]),
+					cp["length"],
+					cp["confidence"],
+					nodes,
+				); err != nil {
+					return nil, err
+				}
+			}
+			if err := cpEnc.Close(); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return buf.Bytes(), nil
 }
 
