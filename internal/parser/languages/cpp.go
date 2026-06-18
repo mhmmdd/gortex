@@ -281,6 +281,9 @@ func (e *CppExtractor) addMethodFromNode(funcNode *sitter.Node, src []byte, file
 	if ns := enclosingCppNamespace(funcNode, src); ns != "" {
 		meta["scope_ns"] = ns
 	}
+	if rt := cppReturnType(funcNode, src); rt != "" {
+		meta["return_type"] = rt
+	}
 	stampCppSignature(meta, funcNode, src)
 	result.Nodes = append(result.Nodes, &graph.Node{
 		ID: id, Kind: graph.KindMethod, Name: methodName,
@@ -294,6 +297,24 @@ func (e *CppExtractor) addMethodFromNode(funcNode *sitter.Node, src []byte, file
 	result.Edges = append(result.Edges, &graph.Edge{
 		From: id, To: classID, Kind: graph.EdgeMemberOf, FilePath: filePath, Line: startLine,
 	})
+}
+
+// cppReturnType returns the base return type of a C++ function/method node (its
+// `type` field), stripping reference/pointer/const/template decoration to the
+// bare type name — the seed for chained-factory receiver inference
+// (`Foo::make().x()`).
+func cppReturnType(node *sitter.Node, src []byte) string {
+	t := node.ChildByFieldName("type")
+	if t == nil {
+		return ""
+	}
+	rt := strings.TrimSpace(t.Content(src))
+	rt = strings.TrimPrefix(rt, "const ")
+	rt = strings.TrimRight(rt, " &*")
+	if i := strings.IndexByte(rt, '<'); i >= 0 {
+		rt = strings.TrimSpace(rt[:i])
+	}
+	return rt
 }
 
 func (e *CppExtractor) emitStruct(m parser.QueryResult, filePath, fileID string, result *parser.ExtractionResult, seen map[string]bool) {

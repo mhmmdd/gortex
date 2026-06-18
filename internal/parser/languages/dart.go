@@ -248,6 +248,11 @@ func (e *DartExtractor) extractMethods(
 			"receiver":   typeName,
 			"visibility": VisibilityByUnderscore(name),
 		}
+		// Declared return type — seeds the chained-factory receiver walker
+		// (helpers_chaintype) so `Widget.create().build()` resolves.
+		if rt := dartMethodReturnType(node, src); rt != "" {
+			methodMeta["return_type"] = rt
+		}
 		if doc := ExtractDocAbove(src, startLine, DocLangSlashSlash); doc != "" {
 			methodMeta["doc"] = doc
 		}
@@ -267,6 +272,29 @@ func (e *DartExtractor) extractMethods(
 			})
 		}
 	})
+}
+
+// dartMethodReturnType returns a Dart method's declared return type — the type
+// that precedes the name in its function_signature (`Widget build()` → Widget).
+// Returns "" when the method has no leading return type (e.g. a void-inferred
+// `build()` or a getter/setter).
+func dartMethodReturnType(methodSig *sitter.Node, src []byte) string {
+	for i := 0; i < int(methodSig.NamedChildCount()); i++ {
+		fs := methodSig.NamedChild(i)
+		if fs.Type() != "function_signature" {
+			continue
+		}
+		for j := 0; j < int(fs.NamedChildCount()); j++ {
+			c := fs.NamedChild(j)
+			switch c.Type() {
+			case "type_identifier", "type", "nullable_type":
+				return strings.TrimSpace(c.Content(src))
+			case "identifier", "function_type":
+				return "" // reached the method name before any return type
+			}
+		}
+	}
+	return ""
 }
 
 // nextDartFunctionBody returns the function_body sibling that follows

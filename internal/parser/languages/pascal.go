@@ -283,6 +283,10 @@ func (e *PascalExtractor) emitPascalMethodDecl(n *sitter.Node, src []byte, fileP
 	meta := map[string]any{"receiver": typeName, "visibility": visibility}
 	if rt := pascalReturnType(n, src); rt != "" {
 		meta["return_type"] = rt
+	} else if pascalFirstChild(n, "kConstructor") != nil {
+		// A constructor yields an instance of its class — seed the
+		// chained-factory walker (`TFoo.Create.Configure`) from the type.
+		meta["return_type"] = typeName
 	}
 	result.Nodes = append(result.Nodes, &graph.Node{
 		ID: id, Kind: graph.KindMethod, Name: mname,

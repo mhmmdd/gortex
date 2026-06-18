@@ -32,6 +32,9 @@ import (
 // unresolvable hop.
 func resolveChainType(expr string, tenv typeEnv, result *parser.ExtractionResult) string {
 	cleaned := stripCallArgs(expr)
+	// C++ / Pascal scope resolution (`Foo::instance()`) is type-member access
+	// just like `.`; normalise so one walker handles every language.
+	cleaned = strings.ReplaceAll(cleaned, "::", ".")
 
 	parts := strings.Split(cleaned, ".")
 	if len(parts) == 0 || parts[0] == "" {
@@ -46,6 +49,14 @@ func resolveChainType(expr string, tenv typeEnv, result *parser.ExtractionResult
 		// static factories resolve like a typed receiver would.
 		if baseIsCall(expr, parts[0]) {
 			currentType = findFactoryReturnType(parts[0], result)
+		} else if len(parts) > 1 && isKnownType(parts[0], result) {
+			// Static-factory chain on a type: `Foo.create().build()` /
+			// `Foo::instance()...` / `TFoo.Create...` — the base names a known
+			// type and the next segment is a static factory / constructor on
+			// it. Seed the walk at the type itself; the next hop advances
+			// through that member's return_type. Gated on the base being a
+			// declared type (decoy-safe — a stray identifier never seeds).
+			currentType = parts[0]
 		}
 	}
 	if currentType == "" {
@@ -98,6 +109,18 @@ func findFactoryReturnType(name string, result *parser.ExtractionResult) string 
 		}
 	}
 	return fallback
+}
+
+// isKnownType reports whether name is declared as a type/interface in the
+// current file's extraction result — the gate that keeps the static-factory
+// chain seed decoy-safe (only a real type seeds the walk).
+func isKnownType(name string, result *parser.ExtractionResult) bool {
+	for _, n := range result.Nodes {
+		if n != nil && n.Name == name && (n.Kind == graph.KindType || n.Kind == graph.KindInterface) {
+			return true
+		}
+	}
+	return false
 }
 
 // stripCallArgs removes balanced parentheses (and anything inside them)
