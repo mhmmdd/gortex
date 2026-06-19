@@ -2,7 +2,10 @@ package mcp
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/zzet/gortex/internal/callpath"
 	"github.com/zzet/gortex/internal/config"
@@ -255,6 +258,136 @@ func confidenceVerdict(rec quality.ConfidenceRecord) string {
 	default:
 		return "low"
 	}
+}
+
+// lowConfidenceRetrievalNote returns the always-on compact retrieval note for
+// a smart_context pack whose underlying retrieval looks untrustworthy. Unlike
+// the opt-in verbose confidence block, this fires by default — but only when
+// the signal is strong: a flat ranked-score distribution OR a head symbol
+// anchored solely by speculative (best-guess dynamic-dispatch) edges. It is
+// suppressed for single-symbol / distinctive-identifier lookups. Returns nil
+// when the retrieval looks sound or there is nothing to assess.
+func (s *Server) lowConfidenceRetrievalNote(ctx context.Context, task string, syms []*graph.Node) map[string]any {
+	if strings.TrimSpace(task) == "" || len(syms) == 0 {
+		return nil
+	}
+	eng := s.engineFor(ctx)
+	if eng == nil {
+		return nil
+	}
+	cands := eng.SearchSymbolsRanked(task, 10, query.QueryOptions{}, nil)
+	scores := make([]float64, 0, len(cands))
+	for _, c := range cands {
+		if c != nil {
+			scores = append(scores, c.Score)
+		}
+	}
+	rec := quality.ConfidenceFromScores(task, scores)
+	return retrievalNoteFor(task, rec, s.headAnchorsAllSpeculative(ctx, syms), likelyDirsFromSymbols(syms, 4))
+}
+
+// retrievalNoteFor is the pure decision behind lowConfidenceRetrievalNote: it
+// turns the task, ranked-confidence record, head-anchor provenance, and
+// candidate directories into the compact note (or nil). Kept side-effect-free
+// so the trigger logic is unit-testable without a live engine.
+func retrievalNoteFor(task string, rec quality.ConfidenceRecord, headSpeculative bool, dirs []string) map[string]any {
+	// A single distinctive identifier is an exact lookup, not a fuzzy search —
+	// never hedge it. A single ranked candidate is likewise confident.
+	if isDistinctiveIdentifierQuery(task) || rec.K <= 1 {
+		return nil
+	}
+	var reason string
+	switch {
+	case confidenceVerdict(rec) == "low":
+		reason = fmt.Sprintf("ranked candidates are tightly clustered (top1/top2 ratio %.2f, std_dev %.3f) — the pack may be off-target",
+			rec.Ratio12, rec.StdDev)
+	case headSpeculative:
+		// Provenance fusion: even a non-flat distribution is untrustworthy
+		// when the head symbol is reachable only by speculative edges.
+		reason = "the top result is anchored only by speculative (best-guess dynamic-dispatch) edges — treat the pack as a lead, not a fact"
+	default:
+		return nil
+	}
+	note := map[string]any{
+		"verdict":         "low",
+		"reason":          reason,
+		"suggested_tools": []string{"find_usages", "search_text", "find_files"},
+	}
+	if len(dirs) > 0 {
+		note["likely_dirs"] = dirs
+	}
+	return note
+}
+
+// isDistinctiveIdentifierQuery reports whether the task is a single token with
+// the shape of a deliberately-typed code identifier (camelCase / snake_case /
+// has digits) — an exact lookup that should never draw a low-confidence hedge.
+func isDistinctiveIdentifierQuery(task string) bool {
+	fields := strings.Fields(task)
+	return len(fields) == 1 && hasIdentifierShape(fields[0])
+}
+
+// headAnchorsAllSpeculative reports whether the top pack symbol's semantic
+// in-edges (calls / references / overrides / implements) exist and are ALL
+// speculative — i.e. the symbol is reachable only by best-guess dispatch, so
+// the retrieval that surfaced it rests on the weakest provenance tier.
+// Structural containment edges are ignored; a symbol with no semantic in-edges
+// is not treated as speculatively anchored.
+func (s *Server) headAnchorsAllSpeculative(ctx context.Context, syms []*graph.Node) bool {
+	if len(syms) == 0 || syms[0] == nil {
+		return false
+	}
+	eng := s.engineFor(ctx)
+	if eng == nil {
+		return false
+	}
+	var sawSemantic bool
+	for _, e := range eng.GetInEdges(syms[0].ID) {
+		if e == nil {
+			continue
+		}
+		switch e.Kind {
+		case graph.EdgeCalls, graph.EdgeReferences, graph.EdgeOverrides, graph.EdgeImplements:
+			sawSemantic = true
+			if e.Origin != graph.OriginSpeculative {
+				return false
+			}
+		}
+	}
+	return sawSemantic
+}
+
+// likelyDirsFromSymbols collects, in pack order, the distinct parent
+// directories of the pack symbols' files (capped at max) — the dirs an agent
+// should grep / list when the retrieval note flags low confidence.
+func likelyDirsFromSymbols(syms []*graph.Node, max int) []string {
+	seen := make(map[string]bool)
+	dirs := make([]string, 0, max)
+	for _, sym := range syms {
+		if sym == nil || sym.FilePath == "" {
+			continue
+		}
+		d := slashDir(sym.FilePath)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		dirs = append(dirs, d)
+		if len(dirs) >= max {
+			break
+		}
+	}
+	return dirs
+}
+
+// slashDir returns the parent directory of a slash-or-OS path, slash-normalised
+// and portable (filepath.Dir would mis-handle "/"-paths on Windows).
+func slashDir(p string) string {
+	p = filepath.ToSlash(p)
+	if i := strings.LastIndex(p, "/"); i > 0 {
+		return p[:i]
+	}
+	return ""
 }
 
 // flowSpine greedily walks forward from the focus over resolved CALLS/REFERENCES

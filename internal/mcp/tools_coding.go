@@ -2106,6 +2106,16 @@ func (s *Server) handleSmartContext(ctx context.Context, req mcp.CallToolRequest
 			addInPackSection(result, "confidence", v)
 		}
 	}
+	// Always-on low-confidence retrieval note: independent of the opt-in
+	// verbose confidence block above, when the retrieval that seeded this
+	// pack looks untrustworthy (flat ranked distribution, or a head symbol
+	// anchored only by speculative edges) attach a compact, actionable note
+	// routing the agent to Gortex's richer escape hatches. Suppressed for
+	// single-symbol / distinctive-identifier lookups, so a confident exact
+	// query never draws a hedge.
+	if note := s.lowConfidenceRetrievalNote(ctx, task, relevantSymbols); note != nil {
+		result["retrieval_note"] = note
+	}
 
 	// Pack-assembly passes: recover the edges between pack symbols a many-rooted
 	// retrieval leaves disconnected, and surface class-hierarchy siblings.

@@ -326,3 +326,61 @@ func TestSmartContextSiblings(t *testing.T) {
 		t.Errorf("GCX missing hierarchy_siblings:\n%s", out)
 	}
 }
+
+// TestRetrievalNoteFiresOnFlatDistribution exercises the pure trigger behind
+// the always-on low-confidence retrieval note: it fires on a flat ranked
+// distribution, fires on a speculatively-anchored head even when the
+// distribution is sharp (the provenance-fusion BEAT axis), and is suppressed
+// for sharp distributions, distinctive-identifier lookups, and single hits.
+func TestRetrievalNoteFiresOnFlatDistribution(t *testing.T) {
+	task := "how does the parser handle errors"
+	flat := quality.ConfidenceFromScores(task, []float64{10, 9.8, 9.7, 9.6, 9.5})
+	sharp := quality.ConfidenceFromScores(task, []float64{10, 2, 1.5, 1, 0.5})
+
+	// 1. Flat distribution + natural-language task → note fires, routes to the
+	// richer escape hatches, carries the pack dirs, cites the distribution.
+	note := retrievalNoteFor(task, flat, false, []string{"internal/parser"})
+	if note == nil {
+		t.Fatal("flat distribution must produce a low-confidence note")
+	}
+	if note["verdict"] != "low" {
+		t.Errorf("verdict = %v, want low", note["verdict"])
+	}
+	tools, _ := note["suggested_tools"].([]string)
+	if !containsString(tools, "find_usages") || !containsString(tools, "search_text") || !containsString(tools, "find_files") {
+		t.Errorf("suggested_tools = %v, want find_usages + search_text + find_files", tools)
+	}
+	dirs, _ := note["likely_dirs"].([]string)
+	if len(dirs) == 0 || dirs[0] != "internal/parser" {
+		t.Errorf("likely_dirs = %v, want the pack dirs", dirs)
+	}
+	if reason, _ := note["reason"].(string); !strings.Contains(reason, "clustered") {
+		t.Errorf("flat reason should cite the distribution; got %q", reason)
+	}
+
+	// 2. Sharp distribution + non-speculative head → no note.
+	if n := retrievalNoteFor(task, sharp, false, nil); n != nil {
+		t.Errorf("a sharp distribution must not draw a note; got %v", n)
+	}
+
+	// 3. Provenance fusion: sharp distribution but the head symbol is anchored
+	// only by speculative edges → the note still fires.
+	n := retrievalNoteFor(task, sharp, true, nil)
+	if n == nil {
+		t.Fatal("a speculatively-anchored head must draw a note even on a sharp distribution")
+	}
+	if reason, _ := n["reason"].(string); !strings.Contains(reason, "speculative") {
+		t.Errorf("provenance reason should cite speculative anchoring; got %q", reason)
+	}
+
+	// 4. A distinctive identifier lookup is an exact query — never hedged.
+	if n := retrievalNoteFor("ParseFile", flat, false, nil); n != nil {
+		t.Errorf("a distinctive identifier lookup must not draw a note; got %v", n)
+	}
+
+	// 5. A single ranked candidate is confident — no note.
+	single := quality.ConfidenceFromScores(task, []float64{10})
+	if n := retrievalNoteFor(task, single, true, nil); n != nil {
+		t.Errorf("a single-candidate retrieval must not draw a note; got %v", n)
+	}
+}
