@@ -51,6 +51,14 @@ const (
 	// repo's root tree. Used by the daemon's MCP front-door.
 	ErrCodeRepoNotTracked ErrorCode = "repo_not_tracked"
 
+	// ErrCodeSymbolNotFound — the requested symbol id is not in the
+	// index. Recoverable: the agent can search for it instead.
+	ErrCodeSymbolNotFound ErrorCode = "symbol_not_found"
+
+	// ErrCodeFileNotIndexed — no symbols are indexed for the requested
+	// file (new / ignored / unsupported language). Recoverable.
+	ErrCodeFileNotIndexed ErrorCode = "file_not_indexed"
+
 	// ErrCodeRouteUnresolved — the multi-server router couldn't
 	// pick a server for the request (no servers.toml entry covers
 	// the workspace, no roster claims it, no default). Retriable

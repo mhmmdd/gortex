@@ -1166,7 +1166,7 @@ func (s *Server) handleGetSymbol(ctx context.Context, req mcp.CallToolRequest) (
 
 	node := s.engineFor(ctx).GetSymbol(id)
 	if node == nil {
-		return mcp.NewToolResultError("symbol not found: " + id), nil
+		return symbolNotFoundGuidance(id), nil
 	}
 
 	// Apply repo/project/ref filter.
@@ -1175,7 +1175,7 @@ func (s *Server) handleGetSymbol(ctx context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError(filterErr.Error()), nil
 	}
 	if allowed != nil && node.RepoPrefix != "" && !allowed[node.RepoPrefix] {
-		return mcp.NewToolResultError("symbol not found in specified scope: " + id), nil
+		return symbolNotFoundGuidance(id), nil
 	}
 
 	s.sessionFor(ctx).recordSymbol(id)
@@ -1853,7 +1853,7 @@ func (s *Server) handleGetFileSummary(ctx context.Context, req mcp.CallToolReque
 		sg = s.engineFor(ctx).GetFileSymbols(fp)
 	}
 	if len(sg.Nodes) == 0 {
-		return mcp.NewToolResultError("no symbols found for file: " + fp), nil
+		return fileNotIndexedGuidance(fp), nil
 	}
 
 	// Apply repo/project/ref filter.
@@ -1863,7 +1863,7 @@ func (s *Server) handleGetFileSummary(ctx context.Context, req mcp.CallToolReque
 	}
 	sg = filterSubGraph(sg, allowed)
 	if len(sg.Nodes) == 0 {
-		return mcp.NewToolResultError("no symbols found for file in specified scope: " + fp), nil
+		return fileNotIndexedGuidance(fp), nil
 	}
 
 	// get_file_summary's contract is "what symbols does this file
@@ -1875,7 +1875,7 @@ func (s *Server) handleGetFileSummary(ctx context.Context, req mcp.CallToolReque
 	// same shape.
 	sg = stripNonDefinitionNodes(sg)
 	if len(sg.Nodes) == 0 {
-		return mcp.NewToolResultError("no symbols found for file: " + fp), nil
+		return fileNotIndexedGuidance(fp), nil
 	}
 
 	// ETag conditional fetch — checked before any savings accounting so

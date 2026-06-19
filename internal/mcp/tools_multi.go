@@ -148,7 +148,9 @@ func (s *Server) handleUntrackRepository(ctx context.Context, req mcp.CallToolRe
 	// Try to find the repo by prefix or by path.
 	prefix := s.resolveRepoPrefix(path)
 	if prefix == "" {
-		return mcp.NewToolResultError(fmt.Sprintf("repository not tracked: %s", path)), nil
+		// Untracking something already untracked is a no-op the agent can act
+		// on, not a session-ending failure — return success-shaped guidance.
+		return repoNotTrackedGuidance(path), nil
 	}
 
 	nodesRemoved, edgesRemoved := s.multiIndexer.UntrackRepo(prefix)

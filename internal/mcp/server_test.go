@@ -298,9 +298,11 @@ func TestGetSymbol(t *testing.T) {
 	var resp map[string]any
 	_ = json.Unmarshal([]byte(text), &resp)
 
-	// Symbol not found returns error.
+	// Symbol not found is RECOVERABLE: a non-error result carrying guidance
+	// (search instead of read-by-id), never a session-abandoning isError.
 	result = callTool(t, srv, "get_symbol", map[string]any{"id": "nonexistent"})
-	assert.True(t, result.IsError)
+	assert.False(t, result.IsError, "symbol-not-found should be success-shaped guidance, not an error")
+	assert.Contains(t, result.Content[0].(mcplib.TextContent).Text, string(ErrCodeSymbolNotFound))
 }
 
 func TestGetEditingContext(t *testing.T) {
