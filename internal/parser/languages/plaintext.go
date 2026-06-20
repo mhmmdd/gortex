@@ -61,7 +61,7 @@ func emitText(filePath string, r io.ReaderAt, size int64, emit func(*graph.Node,
 			ID: id, Kind: graph.KindDoc,
 			Name:     path.Base(filePath) + " §" + strconv.Itoa(chunk),
 			FilePath: filePath, StartLine: startLine, Language: "text",
-			Meta: map[string]any{"asset_kind": "section", "ordinal": chunk, "section_text": text},
+			Meta: map[string]any{"asset_kind": "section", "data_class": "content", "ordinal": chunk, "section_text": text},
 		}
 		emit(node, []*graph.Edge{{From: filePath, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: startLine}})
 	}

@@ -69,6 +69,9 @@ func RegisterAll(reg *parser.Registry) {
 	reg.Register(NewPptxExtractor())
 	reg.Register(NewXlsxExtractor())
 	reg.Register(NewTextExtractor())
+	// Pure data / binary assets — recorded as metadata-only file nodes
+	// (size + sha) and never parsed.
+	reg.Register(NewDataAssetExtractor())
 	reg.Register(NewOrgModeExtractor())
 	reg.Register(NewDartExtractor())
 	reg.Register(NewOCamlExtractor())

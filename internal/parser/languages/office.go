@@ -29,7 +29,7 @@ func contentFileNode(filePath, lang string, size int64) *graph.Node {
 	return &graph.Node{
 		ID: filePath, Kind: graph.KindFile, Name: filePath,
 		FilePath: filePath, StartLine: 1, Language: lang,
-		Meta: map[string]any{"asset_kind": lang, "size_bytes": int(size)},
+		Meta: map[string]any{"asset_kind": lang, "data_class": "content", "size_bytes": int(size)},
 	}
 }
 
@@ -54,7 +54,7 @@ func contentChunkNode(filePath, lang, assetKind, name string, ordinal int, text 
 	node := &graph.Node{
 		ID: id, Kind: graph.KindDoc, Name: name,
 		FilePath: filePath, StartLine: ordinal, Language: lang,
-		Meta: map[string]any{"asset_kind": assetKind, "ordinal": ordinal, "section_text": text},
+		Meta: map[string]any{"asset_kind": assetKind, "data_class": "content", "ordinal": ordinal, "section_text": text},
 	}
 	edge := &graph.Edge{From: filePath, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: ordinal}
 	return node, edge

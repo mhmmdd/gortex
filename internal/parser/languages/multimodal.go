@@ -171,6 +171,7 @@ func (e *PDFExtractor) Extract(filePath string, src []byte) (*parser.ExtractionR
 		FilePath: filePath, StartLine: 1, Language: "pdf",
 		Meta: map[string]any{
 			"asset_kind": "pdf",
+			"data_class": "content",
 			"size_bytes": len(src),
 			"sha256":     hex.EncodeToString(sum[:]),
 		},
@@ -205,6 +206,7 @@ func (e *PDFExtractor) ExtractStream(filePath string, r io.ReaderAt, size int64,
 		FilePath: filePath, StartLine: 1, Language: "pdf",
 		Meta: map[string]any{
 			"asset_kind": "pdf",
+			"data_class": "content",
 			"size_bytes": int(size),
 		},
 	}
@@ -244,7 +246,7 @@ func pdfEmitPages(filePath string, r *pdf.Reader, fileNode *graph.Node, emit fun
 		pageNode := &graph.Node{
 			ID: pageID, Kind: graph.KindDoc, Name: path.Base(filePath) + " p." + strconv.Itoa(i),
 			FilePath: filePath, StartLine: i, Language: "pdf",
-			Meta: map[string]any{"asset_kind": "pdf_page", "page": i, "section_text": text},
+			Meta: map[string]any{"asset_kind": "pdf_page", "data_class": "content", "page": i, "section_text": text},
 		}
 		emit(pageNode, []*graph.Edge{{
 			From: filePath, To: pageID, Kind: graph.EdgeDefines, FilePath: filePath, Line: i,
