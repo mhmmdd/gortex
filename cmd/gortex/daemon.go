@@ -239,6 +239,23 @@ func runDaemonStart(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	srv.Controller = controller
+	// Surface warmup state on the handshake ack: a proxy / CLI that connects
+	// during the (minutes-long) warmup should know the graph is still filling
+	// instead of guessing. controller.IsReady() is authoritative for the bool;
+	// the readiness broadcaster carries the fine-grained phase name.
+	srv.Ready = func() (bool, string) {
+		ready := controller.IsReady()
+		phase := "warming"
+		if ready {
+			phase = "ready"
+		}
+		if state.mcpServer != nil {
+			if p, _ := state.mcpServer.ReadinessPhase(); p != "" {
+				phase = p
+			}
+		}
+		return ready, phase
+	}
 	disp := newMCPDispatcher(state.mcpServer, state.multiIndexer, logger)
 	// The local executor + the dispatcher's SetRouter are handed to the
 	// controller so ControlProxy can build/publish/tear-down the router
