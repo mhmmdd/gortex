@@ -32,6 +32,10 @@ type Provider struct {
 	daemon           bool
 	maxParallel      int
 	logger           *zap.Logger
+	// excludeGlobs are user-configured path globs to skip for enrichment, on
+	// top of the built-in generated/vendored heuristic. Set by the router from
+	// config when the provider is spawned.
+	excludeGlobs []string
 	// spec is the ServerSpec this provider was built from (when the
 	// caller used NewProviderFromSpec). nil for legacy NewProvider
 	// invocations — those fall back to single-language routing.
@@ -276,6 +280,12 @@ func (p *Provider) EnrichRepo(g graph.Store, repoPrefix, repoRoot string) (*sema
 	langNodes := make([]*graph.Node, 0, len(repoNodes))
 	for _, n := range repoNodes {
 		if n.RepoPrefix != repoPrefix || !p.languageMatches(n.Language) {
+			continue
+		}
+		// Skip machine-generated / vendored files (e.g. tree-sitter's generated
+		// parser.c) so the language server never opens or indexes them — that
+		// indexing is by far the slowest part of a fresh index for zero value.
+		if semantic.IsLowValueForEnrichment(n.FilePath, p.excludeGlobs) {
 			continue
 		}
 		langAllByID[n.ID] = n

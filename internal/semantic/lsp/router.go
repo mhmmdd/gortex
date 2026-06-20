@@ -47,6 +47,10 @@ type Router struct {
 	// root) so a server can resolve cross-package imports.
 	additionalWorkspaceFolders []string
 
+	// enrichExcludeGlobs are user-configured path globs to skip for
+	// enrichment, propagated to every spawned provider.
+	enrichExcludeGlobs []string
+
 	mu        sync.Mutex
 	providers map[providerKey]*routedProvider // (spec.Name, workspace) → cached provider
 	enabled   map[string]*ServerSpec          // spec.Name → spec marked enabled by config (no spawn until For/ForSpec)
@@ -287,6 +291,14 @@ func (r *Router) WithAdditionalWorkspaceFolders(folders []string) *Router {
 	return r
 }
 
+// WithEnrichExcludeGlobs sets user-configured path globs that every spawned
+// provider skips for enrichment (on top of the built-in generated/vendored
+// heuristic). Builder-style.
+func (r *Router) WithEnrichExcludeGlobs(globs []string) *Router {
+	r.enrichExcludeGlobs = globs
+	return r
+}
+
 // WithReaperInterval starts a background reaper that calls Reap() at
 // the given cadence. Idempotent — calling twice replaces the previous
 // reaper. A zero duration disables reaping.
@@ -404,6 +416,7 @@ func (r *Router) forSpecWorkspace(spec *ServerSpec, workspace string, pin bool) 
 	// Spawn outside the lock — initialize() blocks on stdio I/O.
 	p := NewProviderFromSpec(spec, r.logger)
 	p.workspaceFolders = r.additionalWorkspaceFolders
+	p.excludeGlobs = r.enrichExcludeGlobs
 	if err := p.EnsureClient(workspace); err != nil {
 		// A binary that resolves on PATH but cannot launch (e.g. a rustup
 		// `rust-analyzer` shim whose toolchain lacks the component) would

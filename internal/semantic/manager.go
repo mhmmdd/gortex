@@ -302,9 +302,16 @@ func (m *Manager) repoLanguages(g graph.Store, roots map[string]string) map[stri
 			// can spawn on an ambiguous edge sourced from a file/import node, so
 			// presence here must be at least as permissive — otherwise we would
 			// gate out a provider whose own pass would have run.
-			if n.RepoPrefix == repoPrefix && n.Language != "" {
-				present[n.Language] = true
+			if n.RepoPrefix != repoPrefix || n.Language == "" {
+				continue
 			}
+			// Generated / vendored files don't make a language "present" — a
+			// repo whose only C is tree-sitter's generated parser.c should not
+			// spawn clangd just to index it.
+			if IsLowValueForEnrichment(n.FilePath, m.config.ExcludeGlobs) {
+				continue
+			}
+			present[n.Language] = true
 		}
 	}
 	return present
