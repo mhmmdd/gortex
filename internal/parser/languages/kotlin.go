@@ -311,6 +311,15 @@ func (e *KotlinExtractor) Extract(filePath string, src []byte) (*parser.Extracti
 	}
 
 	for _, c := range calls {
+		// A bare Capitalized callee (`OkHttpClient()`) is a constructor call,
+		// not a function call — Kotlin has no `new`. emitKotlinReferenceForms
+		// owns it as an EdgeInstantiates to the type; emitting an EdgeCalls to
+		// `unresolved::*.OkHttpClient` here would be a dead duplicate (it never
+		// lands on a method) and would let the type's construction sites hide
+		// from a find_usages of the type. Skip it.
+		if !c.isMember && isKotlinTypeName(c.name) {
+			continue
+		}
 		callerID := findEnclosingFunc(funcRanges, c.line)
 		if callerID == "" {
 			continue
@@ -334,6 +343,14 @@ func (e *KotlinExtractor) Extract(filePath string, src []byte) (*parser.Extracti
 		}
 		result.Edges = append(result.Edges, edge)
 	}
+
+	// Reference forms the type-position passes don't cover: instantiation
+	// (`OkHttpClient()`), casts / type-tests (`as`/`as?`/`is`/`!is`), static /
+	// companion / nested-type access (`OkHttpClient.Builder`), and supertype /
+	// interface inheritance (`class X : Bar(), Iface`). Each lands on the
+	// referenced type and carries Meta["use_kind"] so find_usages surfaces
+	// every mention of a type, not just its declaration sites.
+	emitKotlinReferenceForms(root, src, filePath, fileID, funcRanges, result)
 
 	// Expo Modules native DSL (Name/Function/AsyncFunction) → synthetic
 	// JS-callable method nodes for the Expo bridge synthesizer.
