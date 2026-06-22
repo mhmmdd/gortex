@@ -76,6 +76,11 @@ func (e *DartExtractor) Extract(filePath string, src []byte) (*parser.Extraction
 	// extractors so the enclosing-owner ranges are populated.
 	e.extractTypeUses(root, src, filePath, fileNode, result)
 
+	// Expression-site reference edges — instantiation, inheritance, casts /
+	// type-tests, and static access. Runs after the symbol extractors so the
+	// enclosing-owner ranges and local-type set are populated.
+	e.emitDartReferenceForms(root, src, filePath, fileNode, result)
+
 	captureValueRefCandidates(result, root, filePath, src)
 	captureFnValueCandidates(result, root, filePath, src)
 	return result, nil
