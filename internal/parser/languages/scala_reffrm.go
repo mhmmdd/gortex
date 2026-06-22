@@ -145,6 +145,27 @@ func emitScalaReferenceForms(root *sitter.Node, filePath string, src []byte, res
 			}
 			line := int(n.StartPoint().Row) + 1
 			emit(ownerAt(line), name, filePath, line, graph.EdgeReferences, graph.RefContextStaticAccess)
+		case "generic_type":
+			// `List[Foo]`, `Map[String, Bar]`, `Future[Seq[Repo]]`, … — every
+			// type argument is a use of the named element type. The type-
+			// annotation pass only keeps the container head (`Map`) or the single
+			// unwrapped element (`Option[User]` -> `User`), so an argument in a
+			// non-unwrap position (`Map[String, Bar]` -> `Bar`) or a deeper-nested
+			// argument (`Map[String, List[Account]]` -> `Account`) would otherwise
+			// never surface to find_usages. This case emits a generic_arg
+			// reference for each direct argument's named head; nested
+			// `generic_type` arguments are revisited by the walker, so their own
+			// arguments are covered too.
+			//
+			// Fires for a `generic_type` in any position — val/var annotation,
+			// parameter, return type, a supertype in `extends_clause`, an
+			// isInstanceOf/asInstanceOf or pattern target, or nested inside
+			// another generic — because walkNodes visits them all.
+			line := int(n.StartPoint().Row) + 1
+			owner := ownerAt(line)
+			for _, arg := range scalaGenericArgHeads(n, src) {
+				emit(owner, arg, filePath, line, graph.EdgeReferences, graph.RefContextGenericArg)
+			}
 		}
 	})
 }
@@ -241,6 +262,58 @@ func scalaTypeArgNames(n *sitter.Node, src []byte) []string {
 		}
 	}
 	return out
+}
+
+// scalaGenericArgHeads returns the head type name of every direct argument in a
+// `generic_type` node's `type_arguments` child. A leaf `type_identifier`
+// argument (`Foo`) yields its bare name; a nested `generic_type` argument
+// (`Seq[Repo]`) yields its container head (`Seq`) — the walker revisits the
+// nested node so its own arguments (`Repo`) are captured on that visit. Other
+// type forms (tuple / function / wildcard arguments) are skipped. The emit
+// closure canonicalizes (dotted prefix / single-arg container unwrap) and
+// filters primitives, so this helper only locates the argument heads.
+func scalaGenericArgHeads(n *sitter.Node, src []byte) []string {
+	var out []string
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		ta := n.NamedChild(i)
+		if ta == nil || ta.Type() != "type_arguments" {
+			continue
+		}
+		for j := 0; j < int(ta.NamedChildCount()); j++ {
+			arg := ta.NamedChild(j)
+			if arg == nil {
+				continue
+			}
+			switch arg.Type() {
+			case "type_identifier", "stable_type_identifier", "projected_type":
+				if name := strings.TrimSpace(arg.Content(src)); name != "" {
+					out = append(out, name)
+				}
+			case "generic_type":
+				// Emit the nested container head (`Seq` of `Seq[Repo]`); the
+				// walker visits this nested node separately for its own args.
+				if head := scalaGenericHead(arg, src); head != "" {
+					out = append(out, head)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// scalaGenericHead returns the head type_identifier text of a `generic_type`
+// node (`Seq[Repo]` -> "Seq"), or "".
+func scalaGenericHead(n *sitter.Node, src []byte) string {
+	for i := 0; i < int(n.NamedChildCount()); i++ {
+		c := n.NamedChild(i)
+		if c == nil {
+			continue
+		}
+		if c.Type() == "type_identifier" {
+			return strings.TrimSpace(c.Content(src))
+		}
+	}
+	return ""
 }
 
 // scalaPatternType returns the type a typed_pattern matches against
