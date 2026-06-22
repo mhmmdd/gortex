@@ -29,6 +29,12 @@ import (
 //     navigation_expression whose head is a bare Capitalized simple_identifier
 //     (not self / a lowercase value binding). Emitted as EdgeReferences with
 //     ref_context "static_access".
+//   - GENERIC TYPE ARGUMENTS / COLLECTION ELEMENTS — the element types named
+//     inside a generic argument clause (`Array<Foo>`, `Dictionary<String, Foo>`,
+//     `Result<Foo, E>`) or the array / dictionary sugar (`[Foo]`, `[K: Foo]`),
+//     in every type position. The type-annotation pass normalises a type to its
+//     head and strips the `<…>` args, so these element types would otherwise be
+//     lost. Emitted as EdgeReferences with ref_context "generic_arg".
 //
 // Every structural EdgeReferences edge is stamped Origin
 // graph.OriginASTResolved: cross_pkg_guard reverts weak-tier (text_matched /
@@ -143,6 +149,32 @@ func emitSwiftReferenceForms(root *sitter.Node, src []byte, filePath, fileID str
 			if name := swiftStaticAccessHead(n, src); name != "" {
 				line := int(n.StartPoint().Row) + 1
 				emit(owner(line), name, line, graph.EdgeReferences, graph.RefContextStaticAccess)
+			}
+
+		case "type_arguments", "array_type", "dictionary_type":
+			// GENERIC TYPE ARGUMENTS / COLLECTION ELEMENTS: the element types
+			// named inside a generic argument list (`Array<Foo>` → Foo,
+			// `Dictionary<String, Foo>` → Foo) or the array / dictionary sugar
+			// (`[Foo]` → Foo, `[K: Foo]` → Foo) — in every type position
+			// (annotation, parameter, return, supertype, cast), since the
+			// Swift grammar lowers each of those positions through a
+			// `user_type` whose generic clause is one of these nodes.
+			//
+			// Each direct `user_type` child contributes its head type name;
+			// `swiftBaseTypeName` (via emit) reduces a nested generic element
+			// (`Array<Result<Foo, E>>` → Result for the direct child) to its
+			// constructor, and the walker visits that element's own nested
+			// `type_arguments` separately, so Foo / E are captured one level
+			// down without recursing here. Primitives / lowercase names are
+			// dropped by emit, so a `[String]` or `Array<Int>` adds nothing.
+			line := int(n.StartPoint().Row) + 1
+			ownerID := owner(line)
+			for i := 0; i < int(n.NamedChildCount()); i++ {
+				c := n.NamedChild(i)
+				if c == nil || c.Type() != "user_type" {
+					continue
+				}
+				emit(ownerID, c.Content(src), line, graph.EdgeReferences, "generic_arg")
 			}
 		}
 	})
