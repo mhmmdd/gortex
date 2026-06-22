@@ -153,6 +153,65 @@ func TestSwiftExtractor_StaticAccess(t *testing.T) {
 	}
 }
 
+func TestSwiftExtractor_GenericArgs(t *testing.T) {
+	// Element types named inside a generic argument clause (`Array<Foo>`,
+	// `Dictionary<String, Foo>`, `Result<Foo, E>`) or the array / dictionary
+	// sugar (`[Foo]`, `[K: Foo]`) are lost by the type-annotation pass (which
+	// normalises a type to its head and drops the `<…>` args). The reference
+	// form must recover each element type as an EdgeReferences ref_context=
+	// generic_arg in every type position — a var / property annotation, a
+	// parameter, and a (nested) return type — while a primitive argument
+	// (`Array<Int>`) emits nothing.
+	src := []byte(`func build(items: [Widget], lookup: Dictionary<String, Cache>) {
+    let xs: Array<Element> = []
+    let ns: Array<Int> = []
+}
+func make() -> Result<Box<Inner>, MyError> {
+    fatalError()
+}
+`)
+	res, err := NewSwiftExtractor().Extract("g.swift", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Var / property annotation inside build(): `Array<Element>` → Element.
+	if !swiftRefEdge(res.Edges, "g.swift::build", "Element", graph.EdgeReferences, "generic_arg") {
+		t.Errorf("expected generic_arg edge build -> Element for `Array<Element>`; edges=%v", res.Edges)
+	}
+	// Parameter array sugar `[Widget]` → Widget.
+	if !swiftRefEdge(res.Edges, "g.swift::build", "Widget", graph.EdgeReferences, "generic_arg") {
+		t.Errorf("expected generic_arg edge build -> Widget for `[Widget]`; edges=%v", res.Edges)
+	}
+	// Parameter generic `Dictionary<String, Cache>` → Cache (String dropped).
+	if !swiftRefEdge(res.Edges, "g.swift::build", "Cache", graph.EdgeReferences, "generic_arg") {
+		t.Errorf("expected generic_arg edge build -> Cache for `Dictionary<String, Cache>`; edges=%v", res.Edges)
+	}
+	// Nested return generic `Result<Box<Inner>, MyError>`: the outer clause
+	// contributes Box and MyError; the walker visits the inner `<Inner>`
+	// clause separately for Inner.
+	for _, typ := range []string{"Box", "MyError", "Inner"} {
+		if !swiftRefEdge(res.Edges, "g.swift::make", typ, graph.EdgeReferences, "generic_arg") {
+			t.Errorf("expected generic_arg edge make -> %s in `Result<Box<Inner>, MyError>`; edges=%v", typ, res.Edges)
+		}
+	}
+
+	// A primitive generic argument (`Array<Int>`) must NOT emit a generic_arg
+	// reference; String (the dictionary key) must not either.
+	for _, e := range res.Edges {
+		if e.Kind != graph.EdgeReferences || e.Meta == nil {
+			continue
+		}
+		if uk, _ := e.Meta["ref_context"].(string); uk != "generic_arg" {
+			continue
+		}
+		switch e.To {
+		case "unresolved::Int", "unresolved::String":
+			t.Errorf("primitive generic argument must NOT produce a generic_arg edge; got %v", e)
+		}
+	}
+}
+
 func TestSwiftExtractor_ReferenceFormNegatives(t *testing.T) {
 	// Nothing in this function names a user type via a reference form: a
 	// lowercase call, a self access, and a primitive annotation must each

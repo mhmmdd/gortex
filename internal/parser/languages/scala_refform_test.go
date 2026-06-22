@@ -137,6 +137,48 @@ class User {
 	}
 }
 
+// TestScalaRefFormGenericArgs covers Scala's square-bracket generic arguments
+// (`List[Foo]`, `Map[String, Bar]`, `Future[Seq[Repo]]`, parameterized
+// supertypes) across every position. The type-annotation pass keeps only the
+// container head or the single unwrapped element, so an argument in a non-unwrap
+// slot or nested deeper would never surface to find_usages without these
+// generic_arg reference edges.
+func TestScalaRefFormGenericArgs(t *testing.T) {
+	src := `
+package demo
+class Repo extends Base[Scope] with Mixin[Region] {
+  val one: List[Widget] = Nil
+  var lookup: Map[String, Account] = Map()
+  def f(a: Set[Audit], b: Seq[Log]): Option[Result] = None
+  val deep: Map[String, List[Invoice]] = Map()
+  val nested: Future[Seq[Tenant]] = null
+}
+`
+	edges := extractScalaRefEdges(t, src)
+
+	// Every element type, in every position, surfaces as a generic_arg ref.
+	for _, want := range []string{
+		"Scope",   // supertype type-arg:  extends Base[Scope]
+		"Region",  // mixin type-arg:      with Mixin[Region]
+		"Widget",  // val annotation:      List[Widget]
+		"Account", // var annotation slot: Map[String, Account]
+		"Audit",   // parameter:           Set[Audit]
+		"Log",     // parameter:           Seq[Log]
+		"Result",  // return type:         Option[Result]
+		"Invoice", // deep-nested:         Map[String, List[Invoice]]
+		"Tenant",  // nested:              Future[Seq[Tenant]]
+	} {
+		if !scalaHasRefEdge(edges, want, graph.EdgeReferences, graph.RefContextGenericArg) {
+			t.Errorf("expected generic_arg ref to %s, got %+v", want, edges)
+		}
+	}
+
+	// The String key of every Map is a primitive — filtered everywhere.
+	if countRefEdgesTo(edges, "String") != 0 {
+		t.Errorf("primitive String key must not emit a generic_arg ref, got %+v", edges)
+	}
+}
+
 func TestScalaRefFormNegatives(t *testing.T) {
 	src := `
 package demo
