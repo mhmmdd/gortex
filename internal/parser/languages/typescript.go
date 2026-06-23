@@ -630,6 +630,7 @@ func (e *TypeScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 	captureValueRefCandidates(result, root, filePath, src)
 	captureFnValueCandidates(result, root, filePath, src)
 	captureReduxThunkDispatches(result, root, filePath, src)
+	captureObjectRegistryDispatches(result, root, filePath, src)
 	return result, nil
 }
 

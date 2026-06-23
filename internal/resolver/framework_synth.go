@@ -94,6 +94,7 @@ const (
 	SynthSQLCallsite       = "sql-callsite"
 	SynthStoreFactory      = "store-factory"
 	SynthReduxThunk        = "redux-thunk"
+	SynthObjectRegistry    = "object-registry"
 	SynthGinMiddleware     = "gin-middleware"
 	SynthSvelteKitLoad     = "sveltekit-load"
 	SynthSpeculative       = "speculative-dispatch"
@@ -188,6 +189,10 @@ func defaultFrameworkSynthesizers() []FrameworkSynthesizer {
 		// After store-factory so its action nodes are indexed for the
 		// thunk → reducer cross-link.
 		synthFunc{name: SynthReduxThunk, fn: ResolveReduxThunkCalls},
+		// Object-literal command/handler registry dispatch →
+		// `new registry[key]().execute()`. Runs before the speculative
+		// pass so a claimed dispatch site suppresses the hidden best-guess.
+		synthFunc{name: SynthObjectRegistry, fn: ResolveObjectRegistryCalls},
 		// Gin middleware-chain dispatcher → registered handlers. Bridges the
 		// `c.handlers[idx](c)` indirection so ServeHTTP→handler reachability
 		// flows; repo-scoped, gated on a dispatcher existing.
