@@ -96,6 +96,7 @@ const (
 	SynthReduxThunk        = "redux-thunk"
 	SynthObjectRegistry    = "object-registry"
 	SynthRTKQuery          = "rtk-query"
+	SynthVuexDispatch      = "vuex-dispatch"
 	SynthGinMiddleware     = "gin-middleware"
 	SynthSvelteKitLoad     = "sveltekit-load"
 	SynthSpeculative       = "speculative-dispatch"
@@ -197,6 +198,9 @@ func defaultFrameworkSynthesizers() []FrameworkSynthesizer {
 		// RTK Query generated-hook → createApi endpoint, and component →
 		// generated hook. Typed tier: the hook naming is RTK-contractual.
 		synthFunc{name: SynthRTKQuery, fn: ResolveRTKQueryCalls},
+		// Vuex string-keyed dispatch/commit → action/mutation, with
+		// module-namespace disambiguation.
+		synthFunc{name: SynthVuexDispatch, fn: ResolveVuexDispatchCalls},
 		// Gin middleware-chain dispatcher → registered handlers. Bridges the
 		// `c.handlers[idx](c)` indirection so ServeHTTP→handler reachability
 		// flows; repo-scoped, gated on a dispatcher existing.

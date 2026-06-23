@@ -440,6 +440,7 @@ func (e *JavaScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 	captureObjectRegistryDispatches(result, root, filePath, src)
 	captureRTKQueryEndpoints(result, root, filePath, "javascript", src)
 	capturePiniaStoreCalls(result, root, filePath, src)
+	captureVuexDispatch(result, root, filePath, src)
 	return result, nil
 }
 
