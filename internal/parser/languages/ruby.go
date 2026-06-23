@@ -212,6 +212,7 @@ func (e *RubyExtractor) Extract(filePath string, src []byte) (*parser.Extraction
 
 	captureValueRefCandidates(result, root, filePath, src)
 	captureFnValueCandidates(result, root, filePath, src)
+	captureSidekiqDispatch(result, root, filePath, src)
 	return result, nil
 }
 

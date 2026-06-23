@@ -100,6 +100,7 @@ const (
 	SynthCelery            = "celery-dispatch"
 	SynthSpringEvent       = "spring-event"
 	SynthMediatR           = "mediatr-dispatch"
+	SynthSidekiq           = "sidekiq-dispatch"
 	SynthGinMiddleware     = "gin-middleware"
 	SynthSvelteKitLoad     = "sveltekit-load"
 	SynthSpeculative       = "speculative-dispatch"
@@ -213,6 +214,9 @@ func defaultFrameworkSynthesizers() []FrameworkSynthesizer {
 		// MediatR CQRS dispatch: Send(new X()) → the IRequestHandler<X>
 		// Handle, Publish(new X()) → every INotificationHandler<X>.
 		synthFunc{name: SynthMediatR, fn: ResolveMediatRCalls},
+		// Sidekiq job dispatch: Worker.perform_async(...) → the worker's
+		// perform, namespace-aware. Include-gated, typed tier.
+		synthFunc{name: SynthSidekiq, fn: ResolveSidekiqCalls},
 		// Gin middleware-chain dispatcher → registered handlers. Bridges the
 		// `c.handlers[idx](c)` indirection so ServeHTTP→handler reachability
 		// flows; repo-scoped, gated on a dispatcher existing.
