@@ -204,6 +204,55 @@ func TestCallbackGateSpecialTypeQualified(t *testing.T) {
 	assert.Nil(t, boundCallbackEdge(g, "m.java::M.run", "g.java::bar"), "must not bind the free function")
 }
 
+// TestCallbackGateSkipGateUnique pins a curated-HOF string callable binding to
+// the sole repo-wide function of that name at the gate-skip tier.
+func TestCallbackGateSkipGateUnique(t *testing.T) {
+	g := graph.New()
+	g.AddNode(&graph.Node{ID: "lib.php::helper", Kind: graph.KindFunction, Name: "helper", FilePath: "lib.php"})
+	g.AddNode(&graph.Node{ID: "main.php::run", Kind: graph.KindFunction, Name: "run", FilePath: "main.php"})
+	e := fnValueCandidateEdge("main.php::run", "helper", "main.php", 3)
+	e.Meta["skip_gate"] = true
+	e.Meta["fn_ref_form"] = "php_string_callable"
+	g.AddEdge(e)
+
+	ResolveFnValueCallbacks(g)
+	bound := boundCallbackEdge(g, "main.php::run", "lib.php::helper")
+	require.NotNil(t, bound, "unique string callable binds cross-file")
+	assert.Equal(t, 0.5, bound.Confidence)
+	assert.Equal(t, "php_string_callable", bound.Meta["fn_ref_form"])
+}
+
+// TestCallbackGateSkipGateAmbiguousDropped pins that a string callable whose
+// name has two definitions is dropped.
+func TestCallbackGateSkipGateAmbiguousDropped(t *testing.T) {
+	g := graph.New()
+	g.AddNode(&graph.Node{ID: "a.php::helper", Kind: graph.KindFunction, Name: "helper", FilePath: "a.php"})
+	g.AddNode(&graph.Node{ID: "b.php::helper", Kind: graph.KindFunction, Name: "helper", FilePath: "b.php"})
+	g.AddNode(&graph.Node{ID: "main.php::run", Kind: graph.KindFunction, Name: "run", FilePath: "main.php"})
+	e := fnValueCandidateEdge("main.php::run", "helper", "main.php", 3)
+	e.Meta["skip_gate"] = true
+	g.AddEdge(e)
+
+	assert.Equal(t, 0, ResolveFnValueCallbacks(g), "ambiguous string callable dropped")
+}
+
+// TestCallbackGateSkipGateStaticString pins that a `'Foo::bar'` string callable
+// binds to Foo's bar method, not a same-named free function.
+func TestCallbackGateSkipGateStaticString(t *testing.T) {
+	g := graph.New()
+	g.AddNode(&graph.Node{ID: "f.php::Foo.bar", Kind: graph.KindMethod, Name: "bar", FilePath: "f.php", Meta: map[string]any{"receiver": "Foo"}})
+	g.AddNode(&graph.Node{ID: "g.php::bar", Kind: graph.KindFunction, Name: "bar", FilePath: "g.php"})
+	g.AddNode(&graph.Node{ID: "main.php::run", Kind: graph.KindFunction, Name: "run", FilePath: "main.php"})
+	e := fnValueCandidateEdge("main.php::run", "bar", "main.php", 3)
+	e.Meta["skip_gate"] = true
+	e.Meta["fn_ref_recv_hint"] = "Foo"
+	g.AddEdge(e)
+
+	ResolveFnValueCallbacks(g)
+	require.NotNil(t, boundCallbackEdge(g, "main.php::run", "f.php::Foo.bar"), "Foo::bar binds to Foo.bar")
+	assert.Nil(t, boundCallbackEdge(g, "main.php::run", "g.php::bar"), "must not bind the free function")
+}
+
 func TestResolveMemberByType(t *testing.T) {
 	g := graph.New()
 	g.AddNode(&graph.Node{ID: "a::Foo.m", Kind: graph.KindMethod, Name: "m", Meta: map[string]any{"receiver": "Foo"}})

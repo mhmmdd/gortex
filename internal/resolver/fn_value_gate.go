@@ -66,10 +66,22 @@ func ResolveFnValueCallbacks(g graph.Store) int {
 		// plain candidate binds same-file.
 		recvHint, _ := e.Meta["fn_ref_recv_hint"].(string)
 		ungated, _ := e.Meta["fn_value_ungated"].(bool)
+		skipGate, _ := e.Meta["skip_gate"].(bool)
 		target := ""
 		conf := 0.6
 		origin := graph.OriginASTInferred
 		switch {
+		case skipGate:
+			// Curated-HOF string callable: bypass same-file scope and bind by a
+			// repo-wide unique-or-drop rule (a `Class::method` string scopes to
+			// the type).
+			if recvHint != "" {
+				target = resolveMemberByType(g, recvHint, name)
+			}
+			if target == "" {
+				target = resolveUniqueFnValue(g, name)
+			}
+			conf = 0.5
 		case recvHint == "<self>":
 			if target = resolveFnValueSelfMember(g, e.From, name); target != "" {
 				conf, origin = 0.85, graph.OriginASTResolved
@@ -145,11 +157,11 @@ func resolveFnValueName(g graph.Store, filePath, name string) string {
 	return ""
 }
 
-// resolveFnValueCrossModule binds a qualified-path function value to a
-// uniquely-named function/method anywhere in the repo, refusing on ambiguity
-// (more than one definition of the name). The same-file path is preferred by
-// the caller; this is the cross-module fallback for an explicit path value.
-func resolveFnValueCrossModule(g graph.Store, name string) string {
+// resolveUniqueFnValue returns the ID of the sole function/method named name in
+// the repo, or "" when none or more than one exists (unique-or-drop). The
+// shared repo-wide resolution rule for qualified-path and gate-skipping
+// (curated-HOF string) function values.
+func resolveUniqueFnValue(g graph.Store, name string) string {
 	match := ""
 	for _, n := range g.FindNodesByName(name) {
 		if n == nil {
@@ -159,11 +171,19 @@ func resolveFnValueCrossModule(g graph.Store, name string) string {
 			continue
 		}
 		if match != "" && match != n.ID {
-			return "" // ambiguous across modules — drop
+			return "" // ambiguous — drop
 		}
 		match = n.ID
 	}
 	return match
+}
+
+// resolveFnValueCrossModule binds a qualified-path function value to a
+// uniquely-named function/method anywhere in the repo. The same-file path is
+// preferred by the caller; this is the cross-module fallback for an explicit
+// path value.
+func resolveFnValueCrossModule(g graph.Store, name string) string {
+	return resolveUniqueFnValue(g, name)
 }
 
 // resolveMemberByType binds member to a uniquely-named method of typeName

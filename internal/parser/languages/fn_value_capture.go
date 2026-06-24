@@ -53,6 +53,9 @@ type FnValueCandidate struct {
 	// RecvHint scopes the gate's resolution for a special form: "<self>" (the
 	// enclosing type), a concrete type name, or "" (repo-wide).
 	RecvHint string
+	// SkipGate marks a curated-HOF string callable that bypasses the same-file
+	// gate and resolves by a repo-wide unique-or-drop rule.
+	SkipGate bool
 }
 
 // captureFnValueCandidates records a function-as-value candidate for every
@@ -215,6 +218,9 @@ func EmitFnValueCandidates(result *parser.ExtractionResult, cands []FnValueCandi
 		}
 		if c.RecvHint != "" {
 			meta["fn_ref_recv_hint"] = c.RecvHint
+		}
+		if c.SkipGate {
+			meta["skip_gate"] = true
 		}
 		result.Edges = append(result.Edges, &graph.Edge{
 			From:     c.FromID,

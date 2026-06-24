@@ -19,7 +19,7 @@ func NewPHPExtractor() *PHPExtractor {
 	return &PHPExtractor{lang: php.GetLanguage()}
 }
 
-func (e *PHPExtractor) Language() string     { return "php" }
+func (e *PHPExtractor) Language() string { return "php" }
 func (e *PHPExtractor) Extensions() []string {
 	// Drupal module files (.module/.install/.inc/.theme/.profile/.engine) are
 	// PHP source whose function names follow the hook convention.
@@ -50,6 +50,7 @@ func (e *PHPExtractor) Extract(filePath string, src []byte) (*parser.ExtractionR
 
 	captureValueRefCandidates(result, root, filePath, src)
 	captureFnValueCandidates(result, root, filePath, src)
+	e.capturePHPStringCallables(result, root, filePath, src)
 
 	// Expression-site and inheritance-clause reference forms #143's
 	// type-use pass (typed property / param / return EdgeTypedAs) misses:
