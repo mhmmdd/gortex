@@ -302,3 +302,44 @@ func TestResolveRelativeImports_CIncludeFallbackToSuffix(t *testing.T) {
 	assert.Equal(t, "gen/include/proj/api.h", e.To, "falls back to suffix-unique match")
 	assert.Nil(t, e.Meta["resolved_via"], "suffix fallback is not stamped compile_db")
 }
+
+// TestResolveRelativeImports_CIncludeStdlibAngleGuard pins the basename-collision
+// guard: a standard-library angle include never binds to an in-tree file that
+// shares its basename, even when a declared -I dir would otherwise resolve it.
+func TestResolveRelativeImports_CIncludeStdlibAngleGuard(t *testing.T) {
+	g := graph.New()
+	seedFile(g, "src/main.cpp", "cpp")
+	seedFile(g, "lib/vector", "cpp") // in-tree file whose basename collides with <vector>
+	e := &graph.Edge{
+		From: "src/main.cpp", To: "unresolved::import::vector", Kind: graph.EdgeImports,
+		Meta: map[string]any{"include_kind": "system"},
+	}
+	g.AddEdge(e)
+
+	r := New(g)
+	// -Ilib would bind lib/vector were it not for the stdlib guard.
+	r.SetCppIncludeDirs(map[string][]string{"src/main.cpp": {"lib"}})
+	r.resolveRelativeImports()
+
+	assert.Equal(t, "unresolved::import::vector", e.To, "stdlib <vector> must not bind to in-tree lib/vector")
+}
+
+// TestResolveRelativeImports_CIncludeSystemNonStdlibResolves pins that a
+// non-stdlib angle include now resolves through the -I search path.
+func TestResolveRelativeImports_CIncludeSystemNonStdlibResolves(t *testing.T) {
+	g := graph.New()
+	seedFile(g, "src/main.c", "c")
+	seedFile(g, "include/proj/api.h", "c")
+	e := &graph.Edge{
+		From: "src/main.c", To: "unresolved::import::proj/api.h", Kind: graph.EdgeImports,
+		Meta: map[string]any{"include_kind": "system"},
+	}
+	g.AddEdge(e)
+
+	r := New(g)
+	r.SetCppIncludeDirs(map[string][]string{"src/main.c": {"include"}})
+	r.resolveRelativeImports()
+
+	assert.Equal(t, "include/proj/api.h", e.To, "non-stdlib angle include resolves via -I dir")
+	assert.Equal(t, "include", e.Meta["include_dir"])
+}

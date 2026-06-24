@@ -187,12 +187,22 @@ func (r *Resolver) resolveRelativeImports() {
 				resolved = resolveDart(e.From, path)
 			}
 		default:
-			// C-family quoted include: `#include "foo.h"` / `#import "Foo.h"`
-			// resolves relative to the including file's directory.
+			// C-family include: a quoted `#include "foo.h"` / `#import "Foo.h"`
+			// resolves relative to the including file's directory; an angle
+			// `#include <foo/bar.h>` resolves through the `-I` search path —
+			// except standard-library headers, which stay external.
 			if lang == "c" || lang == "cpp" || lang == "objc" {
-				if k, _ := e.Meta["include_kind"].(string); k == "quoted" &&
+				k, _ := e.Meta["include_kind"].(string)
+				if (k == "quoted" || k == "system") &&
 					strings.HasPrefix(e.To, "unresolved::import::") {
 					path = strings.TrimPrefix(e.To, "unresolved::import::")
+					// A standard-library angle include (<vector>, <stdio.h>, …)
+					// is external by construction: never probe `-I` dirs for it,
+					// so it can never bind to an in-tree file sharing its
+					// basename. The basename-collision guard.
+					if k == "system" && IsCppStdlibHeader(path) {
+						continue
+					}
 					var incDir string
 					resolved, incDir = resolveCInclude(e.From, path)
 					if resolved != "" && incDir != "" {
