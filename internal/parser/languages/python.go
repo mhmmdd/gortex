@@ -381,6 +381,7 @@ func (e *PythonExtractor) Extract(filePath string, src []byte) (*parser.Extracti
 	captureValueRefCandidates(result, root, filePath, src)
 	captureFnValueCandidates(result, root, filePath, src)
 	captureCeleryDispatch(result, root, filePath, src)
+	captureDjangoDescriptors(result, root, filePath, src)
 	return result, nil
 }
 

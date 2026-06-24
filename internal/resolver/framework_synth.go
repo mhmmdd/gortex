@@ -104,6 +104,7 @@ const (
 	SynthLaravelEvent      = "laravel-event"
 	SynthFnPointerDispatch = "fn-pointer-dispatch"
 	SynthGoFrameRoute      = "goframe-route"
+	SynthDjangoDescriptor  = "django-descriptor"
 	SynthGinMiddleware     = "gin-middleware"
 	SynthSvelteKitLoad     = "sveltekit-load"
 	SynthSpeculative       = "speculative-dispatch"
@@ -281,5 +282,72 @@ func RunFrameworkSynthesizers(g graph.Store) FrameworkSynthReport {
 		rep.Per = append(rep.Per, SynthCount{Name: s.Name(), Edges: n})
 		rep.Total += n
 	}
+	// Claiming resolvers run last — after every framework synthesizer has
+	// had its chance to consume a pre-stamped placeholder, but before
+	// external-call synthesis classifies the residual unresolved refs as
+	// external. Reported in registration order for determinism.
+	claimed := RunClaimingResolvers(g)
+	for _, r := range defaultClaimingResolvers() {
+		n := claimed[r.Name()]
+		rep.Per = append(rep.Per, SynthCount{Name: r.Name(), Edges: n})
+		rep.Total += n
+	}
 	return rep
+}
+
+// ClaimingResolver retroactively claims a residual unresolved reference —
+// one naming no declared symbol — that the extractor could not pre-tag, and
+// rewrites it to a framework-known target. This is the generic
+// claimsReference hook: a resolver offers a cheap name-vocabulary pre-filter
+// (Claims) and, when it wins, rebinds the edge (Resolve). It runs before
+// external-call synthesis would otherwise discard the reference as external.
+type ClaimingResolver interface {
+	// Name is the stable provenance label stamped on the rebound edge.
+	Name() string
+	// Claims reports whether this resolver wants the unresolved edge — a
+	// cheap pre-filter on the reference's vocabulary, no graph work.
+	Claims(e *graph.Edge) bool
+	// Resolve rebinds e.To to a concrete target, returning true on a hit.
+	Resolve(g graph.Store, e *graph.Edge) bool
+}
+
+// defaultClaimingResolvers returns the registered claiming resolvers, in
+// offer order.
+func defaultClaimingResolvers() []ClaimingResolver {
+	return []ClaimingResolver{
+		DjangoDescriptorResolver{},
+	}
+}
+
+// RunClaimingResolvers offers every residual unresolved EdgeCalls /
+// EdgeReferences to the claiming resolvers; the first whose Claims pre-filter
+// passes and whose Resolve lands a target wins. Returns the per-resolver
+// count of claimed edges. Unresolved edges are collected before resolving so
+// a resolver's ReindexEdges does not mutate a live iteration.
+func RunClaimingResolvers(g graph.Store) map[string]int {
+	out := map[string]int{}
+	if g == nil {
+		return out
+	}
+	resolvers := defaultClaimingResolvers()
+	if len(resolvers) == 0 {
+		return out
+	}
+	var pending []*graph.Edge
+	for _, kind := range []graph.EdgeKind{graph.EdgeCalls, graph.EdgeReferences} {
+		for e := range g.EdgesByKind(kind) {
+			if e != nil && e.To != "" && graph.IsUnresolvedTarget(e.To) {
+				pending = append(pending, e)
+			}
+		}
+	}
+	for _, e := range pending {
+		for _, r := range resolvers {
+			if r.Claims(e) && r.Resolve(g, e) {
+				out[r.Name()]++
+				break
+			}
+		}
+	}
+	return out
 }
