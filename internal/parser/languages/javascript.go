@@ -260,11 +260,24 @@ func (e *JavaScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 			continue
 		}
 		id := filePath + "::" + v.name
-		result.Nodes = append(result.Nodes, &graph.Node{
+		node := &graph.Node{
 			ID: id, Kind: graph.KindVariable, Name: v.name,
 			FilePath: filePath, StartLine: v.line, EndLine: v.endLine,
 			Language: "javascript",
-		})
+		}
+		// React HOC / styled component classification + inline-render JSX
+		// re-attribution (see the TS extractor for the shared helper).
+		if v.name != "" && v.name[0] >= 'A' && v.name[0] <= 'Z' {
+			if kind, renderFn := reactHOCComponentKind(v.defNode, src); kind != "" {
+				node.Meta = map[string]any{"component": true, "component_kind": kind}
+				if renderFn != nil {
+					if body := renderFn.ChildByFieldName("body"); body != nil {
+						emitJSXRenderEdges(id, body, src, filePath, result)
+					}
+				}
+			}
+		}
+		result.Nodes = append(result.Nodes, node)
 		result.Edges = append(result.Edges, &graph.Edge{
 			From: fileID, To: id, Kind: graph.EdgeDefines, FilePath: filePath, Line: v.line,
 		})

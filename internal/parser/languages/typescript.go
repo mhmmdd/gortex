@@ -549,11 +549,25 @@ func (e *TypeScriptExtractor) Extract(filePath string, src []byte) (*parser.Extr
 			continue
 		}
 		id := filePath + "::" + v.name
-		result.Nodes = append(result.Nodes, &graph.Node{
+		node := &graph.Node{
 			ID: id, Kind: graph.KindVariable, Name: v.name,
 			FilePath: filePath, StartLine: v.startLn + 1, EndLine: v.endLn + 1,
 			Language: "typescript",
-		})
+		}
+		// React HOC / styled component: a PascalCase const wrapping
+		// memo/forwardRef/styled is a component; flag it and attribute the
+		// inline render function's JSX to the outer const (not the anon arrow).
+		if v.name != "" && v.name[0] >= 'A' && v.name[0] <= 'Z' {
+			if kind, renderFn := reactHOCComponentKind(v.defNode, src); kind != "" {
+				node.Meta = map[string]any{"component": true, "component_kind": kind}
+				if renderFn != nil {
+					if body := renderFn.ChildByFieldName("body"); body != nil {
+						emitJSXRenderEdges(id, body, src, filePath, result)
+					}
+				}
+			}
+		}
+		result.Nodes = append(result.Nodes, node)
 		result.Edges = append(result.Edges, &graph.Edge{
 			From: fileID, To: id, Kind: graph.EdgeDefines,
 			FilePath: filePath, Line: v.startLn + 1,

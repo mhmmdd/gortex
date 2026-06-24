@@ -101,7 +101,7 @@ func rtkEmitEndpoint(result *parser.ExtractionResult, filePath, language, endpoi
 	result.Nodes = append(result.Nodes, &graph.Node{
 		ID: hookID, Kind: graph.KindFunction, Name: hookName,
 		FilePath: filePath, StartLine: startLn, EndLine: endLn, Language: language,
-		Meta: map[string]any{"rtk_generated_hook": true, "signature": hookName + "()"},
+		Meta: map[string]any{"rtk_generated_hook": true, "generated": true, "codegen_tool": "rtk-query", "signature": hookName + "()"},
 	})
 	sourceNames[hookName] = true
 	result.Edges = append(result.Edges, &graph.Edge{
