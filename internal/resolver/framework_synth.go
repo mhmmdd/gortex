@@ -108,6 +108,7 @@ const (
 	SynthExpressResolve    = "express-resolve"
 	SynthReactResolve      = "react-resolve"
 	SynthFastAPIResolve    = "fastapi-resolve"
+	SynthRailsResolve      = "rails-resolve"
 	SynthGinMiddleware     = "gin-middleware"
 	SynthSvelteKitLoad     = "sveltekit-load"
 	SynthSpeculative       = "speculative-dispatch"
@@ -247,6 +248,10 @@ func defaultFrameworkSynthesizers() []FrameworkSynthesizer {
 		// to a /routers/ definition — only when reference resolution left the
 		// target unresolved.
 		synthFunc{name: SynthFastAPIResolve, fn: ResolveFastAPIDeps},
+		// Rails receiver-constant resolution: a `UserService.perform` /
+		// `User.find` / `ApplicationHelper.fmt` call binds to the directory-
+		// located service / model / helper definition named by its receiver.
+		synthFunc{name: SynthRailsResolve, fn: ResolveRailsRefs},
 		// GoFrame reflective route → controller method, joined by the
 		// method's request-struct type rather than its name.
 		synthFunc{name: SynthGoFrameRoute, fn: ResolveGoFrameRoutes},

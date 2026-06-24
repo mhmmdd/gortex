@@ -92,7 +92,7 @@ func dirConventionCandidates(g graph.Store, name, suffix string) []*graph.Node {
 // placeholder).
 func isConventionResolvable(n *graph.Node) bool {
 	switch n.Kind {
-	case graph.KindFunction, graph.KindMethod, graph.KindType, graph.KindInterface, graph.KindVariable:
+	case graph.KindFunction, graph.KindMethod, graph.KindType, graph.KindInterface, graph.KindVariable, graph.KindPackage:
 	default:
 		return false
 	}

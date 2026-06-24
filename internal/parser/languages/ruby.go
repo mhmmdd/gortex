@@ -87,6 +87,11 @@ type rubyDeferredCall struct {
 	name    string
 	line    int
 	hasRecv bool
+	// receiver is the PascalCase constant receiver of a `Const.method` call
+	// (`UserService`, `User`), or "" when the receiver is a variable / self /
+	// literal. Stamped as Meta["recv_const"] so the Rails resolver can bind
+	// the call to the directory-located service / model / helper definition.
+	receiver string
 	// returnUsage is how the call site consumes the return value
 	// (graph.ReturnUsage* label), classified at capture time and
 	// stamped as edge Meta on the EdgeCalls emitted for this site.
@@ -154,15 +159,18 @@ func (e *RubyExtractor) Extract(filePath string, src []byte) (*parser.Extraction
 				}
 			}
 			hasRecv := false
+			receiver := ""
 			if expr.Node != nil {
-				if expr.Node.ChildByFieldName("receiver") != nil {
+				if recv := expr.Node.ChildByFieldName("receiver"); recv != nil {
 					hasRecv = true
+					receiver = rubyReceiverConst(recv, src)
 				}
 			}
 			calls = append(calls, rubyDeferredCall{
 				name:        name,
 				line:        expr.StartLine + 1,
 				hasRecv:     hasRecv,
+				receiver:    receiver,
 				returnUsage: classifyReturnUsage(expr.Node, src, rubyReturnUsageSpec),
 			})
 
@@ -199,6 +207,12 @@ func (e *RubyExtractor) Extract(filePath string, src []byte) (*parser.Extraction
 			Kind: graph.EdgeCalls, FilePath: filePath, Line: c.line,
 		}
 		stampReturnUsage(edge, c.returnUsage)
+		if c.receiver != "" {
+			if edge.Meta == nil {
+				edge.Meta = map[string]any{}
+			}
+			edge.Meta["recv_const"] = c.receiver
+		}
 		result.Edges = append(result.Edges, edge)
 	}
 
@@ -332,6 +346,24 @@ func applyRubyBodyVisibility(body *sitter.Node, src []byte, filePath, className 
 }
 
 // --- Per-match emit helpers -----------------------------------------
+
+// rubyReceiverConst returns the constant name of a call receiver — `User` for
+// `User.find`, the last segment of `Admin::User` for a scoped receiver — or ""
+// when the receiver is not a constant (a variable, self, literal, ...).
+func rubyReceiverConst(recv *sitter.Node, src []byte) string {
+	if recv == nil {
+		return ""
+	}
+	switch recv.Type() {
+	case "constant":
+		return recv.Content(src)
+	case "scope_resolution":
+		if name := recv.ChildByFieldName("name"); name != nil && name.Type() == "constant" {
+			return name.Content(src)
+		}
+	}
+	return ""
+}
 
 func (e *RubyExtractor) emitClass(m parser.QueryResult, filePath, fileID string, src []byte, result *parser.ExtractionResult, seen map[string]bool) {
 	name := m.Captures["class.name"].Text
