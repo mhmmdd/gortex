@@ -7,227 +7,67 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/zzet/gortex/internal/analyzer"
 	"github.com/zzet/gortex/internal/graph"
-	"github.com/zzet/gortex/internal/resolver"
 )
 
-// Structured resolver-suppression taxonomy. When the resolver leaves a
-// call / reference edge on an `unresolved::` placeholder it records no
-// reason — an agent only sees that the edge is unresolved, not *why*.
-// This analyzer reconstructs the why from the graph: for each unresolved
-// edge it looks up the name's definition candidates and classifies the
-// outcome. The reasons reflect Gortex's name-based resolver model (not a
-// C++ overload set), so the taxonomy is honest about how this resolver
-// actually gives up.
+// Structured resolver-suppression taxonomy. The canonical constants live in
+// internal/analyzer; these aliases keep existing MCP-package call sites and
+// tests compiling against a single source of truth.
 const (
-	// outcomeAmbiguousMultiMatch: two or more same-name, same-language
-	// definitions exist — the resolver could not pick one and punted.
-	outcomeAmbiguousMultiMatch = "ambiguous_multi_match"
-	// outcomeCandidateOutOfScope: exactly one same-language definition
-	// exists but the edge stayed unresolved — it was outside the caller's
-	// resolution scope (cross-package guard, reachability prune, or a
-	// receiver-type mismatch).
-	outcomeCandidateOutOfScope = "candidate_out_of_scope"
-	// outcomeCrossLanguageOnly: the only definitions of this name are in a
-	// different language family, so the language gate suppressed the link.
-	outcomeCrossLanguageOnly = "cross_language_only"
-	// outcomeStubOnly: the name matches only stub / external-placeholder
-	// nodes — no real definition is indexed.
-	outcomeStubOnly = "stub_only"
-	// outcomeNoDefinition: no definition of this name exists in the graph
-	// at all — a genuinely external or un-indexed target.
-	outcomeNoDefinition = "no_definition"
-	// outcomeStdlibHeader: a C / C++ / Objective-C angle-include of a
-	// standard-library header (<stdio.h>, <vector>, …) — external by
-	// construction, left unresolved deliberately so it can never bind to an
-	// in-tree file sharing its basename.
-	outcomeStdlibHeader = "stdlib_header"
+	outcomeAmbiguousMultiMatch = analyzer.OutcomeAmbiguousMultiMatch
+	outcomeCandidateOutOfScope = analyzer.OutcomeCandidateOutOfScope
+	outcomeCrossLanguageOnly   = analyzer.OutcomeCrossLanguageOnly
+	outcomeNoDefinition        = analyzer.OutcomeNoDefinition
+	outcomeStdlibHeader        = analyzer.OutcomeStdlibHeader
 )
 
 // handleAnalyzeResolutionOutcomes classifies every unresolved call /
 // reference edge by the structured reason the resolver gave up, and
 // returns a per-reason rollup plus example rows. Optional `reason`
 // filters to one outcome; optional `limit` caps the example rows.
+//
+// The classification itself lives in
+// internal/analyzer.AnalyzeResolutionOutcomes — a pure Calculation — so the
+// same taxonomy logic is independently testable and reusable across surfaces.
 func (s *Server) handleAnalyzeResolutionOutcomes(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	reasonFilter := strings.TrimSpace(stringArg(args, "reason"))
 	limit := intArg(args, "limit", 50)
 
-	type row struct {
-		From       string `json:"from"`
-		To         string `json:"to"`
-		Kind       string `json:"edge_kind"`
-		Name       string `json:"name"`
-		Reason     string `json:"reason"`
-		Candidates int    `json:"candidates"`
-	}
-
-	// Collect unresolved edges + the From IDs (for language lookup).
-	type pending struct {
-		edge *graph.Edge
-		name string
-	}
-	var todo []pending
-	fromIDs := map[string]struct{}{}
-	for _, kind := range []graph.EdgeKind{graph.EdgeCalls, graph.EdgeReferences} {
-		for e := range s.graph.EdgesByKind(kind) {
-			if e == nil || !graph.IsUnresolvedTarget(e.To) {
-				continue
-			}
-			name := graph.UnresolvedName(e.To)
-			if name == "" {
-				continue
-			}
-			// A receiver-qualified placeholder (`unresolved::*.foo`) keeps
-			// its method name after the dot; normalise to the bare name.
-			if i := strings.LastIndexByte(name, '.'); i >= 0 && i+1 < len(name) {
-				name = name[i+1:]
-			}
-			todo = append(todo, pending{edge: e, name: name})
-			if e.From != "" {
-				fromIDs[e.From] = struct{}{}
-			}
-		}
-	}
-	fromList := make([]string, 0, len(fromIDs))
-	for id := range fromIDs {
-		fromList = append(fromList, id)
-	}
-	fromNodes := s.graph.GetNodesByIDs(fromList)
-
-	byReason := map[string]int{}
-	var rows []row
-	// Memoise classification by (name, caller-language): the same
-	// unresolved name is referenced from many sites — every call to one
-	// missing function — and classifyUnresolved is pure given that pair,
-	// so this collapses a FindNodesByName-per-edge into one per distinct
-	// (name, lang).
-	type classKey struct{ name, lang string }
-	type classVal struct {
-		reason string
-		ncand  int
-	}
-	classCache := map[classKey]classVal{}
-	for _, p := range todo {
-		fromLang := ""
-		if n := fromNodes[p.edge.From]; n != nil {
-			fromLang = n.Language
-		}
-		key := classKey{name: p.name, lang: fromLang}
-		cv, ok := classCache[key]
-		if !ok {
-			cv.reason, cv.ncand = s.classifyUnresolved(p.name, fromLang)
-			classCache[key] = cv
-		}
-		reason, ncand := cv.reason, cv.ncand
-		byReason[reason]++
-		if reasonFilter != "" && reason != reasonFilter {
-			continue
-		}
-		if len(rows) < limit {
-			rows = append(rows, row{
-				From: p.edge.From, To: p.edge.To, Kind: string(p.edge.Kind),
-				Name: p.name, Reason: reason, Candidates: ncand,
-			})
-		}
-	}
-
-	// C/C++/ObjC standard-library angle-includes (<stdio.h>, <vector>, …) are
-	// external by construction: the resolver leaves them on an unresolved
-	// import placeholder rather than binding to an in-tree file that happens
-	// to share the basename. Surface them under their own reason so the
-	// outcome reads as "stdlib" instead of an opaque unresolved import.
-	for e := range s.graph.EdgesByKind(graph.EdgeImports) {
-		if e == nil || !graph.IsUnresolvedTarget(e.To) {
-			continue
-		}
-		if k, _ := e.Meta["include_kind"].(string); k != "system" {
-			continue
-		}
-		hdr := strings.TrimPrefix(e.To, "unresolved::import::")
-		if !resolver.IsCppStdlibHeader(hdr) {
-			continue
-		}
-		byReason[outcomeStdlibHeader]++
-		if reasonFilter != "" && reasonFilter != outcomeStdlibHeader {
-			continue
-		}
-		if len(rows) < limit {
-			rows = append(rows, row{
-				From: e.From, To: e.To, Kind: string(e.Kind),
-				Name: hdr, Reason: outcomeStdlibHeader, Candidates: 0,
-			})
-		}
-	}
+	result := analyzer.AnalyzeResolutionOutcomes(s.graph, reasonFilter, limit)
 
 	if isCompact(req) {
 		var b strings.Builder
-		reasons := make([]string, 0, len(byReason))
-		for r := range byReason {
+		reasons := make([]string, 0, len(result.ByReason))
+		for r := range result.ByReason {
 			reasons = append(reasons, r)
 		}
-		sort.Slice(reasons, func(i, j int) bool { return byReason[reasons[i]] > byReason[reasons[j]] })
+		sort.Slice(reasons, func(i, j int) bool { return result.ByReason[reasons[i]] > result.ByReason[reasons[j]] })
 		for _, r := range reasons {
 			b.WriteString(r)
 			b.WriteString(": ")
-			b.WriteString(strconv.Itoa(byReason[r]))
+			b.WriteString(strconv.Itoa(result.ByReason[r]))
 			b.WriteByte('\n')
 		}
-		if len(byReason) == 0 {
+		if len(result.ByReason) == 0 {
 			b.WriteString("no unresolved edges\n")
 		}
 		return mcp.NewToolResultText(b.String()), nil
 	}
 
-	total := 0
-	for _, n := range byReason {
-		total += n
-	}
 	return s.respondJSONOrTOON(ctx, req, map[string]any{
-		"by_reason": byReason,
-		"total":     total,
-		"rows":      rows,
+		"by_reason": result.ByReason,
+		"total":     result.Total,
+		"rows":      result.Rows,
 	})
-}
-
-// classifyUnresolved returns the structured suppression reason for an
-// unresolved name relative to the caller's language, plus the number of
-// real (non-stub) definition candidates considered.
-func (s *Server) classifyUnresolved(name, fromLang string) (reason string, candidates int) {
-	var realSameLang, realOtherLang, stubs int
-	for _, n := range s.graph.FindNodesByName(name) {
-		if n == nil {
-			continue
-		}
-		if graph.IsStub(n.ID) {
-			stubs++
-			continue
-		}
-		if !nodeIsDefinitionKind(n.Kind) {
-			continue
-		}
-		if fromLang != "" && n.Language != "" && !sameLanguageFamily(fromLang, n.Language) {
-			realOtherLang++
-			continue
-		}
-		realSameLang++
-	}
-	switch {
-	case realSameLang >= 2:
-		return outcomeAmbiguousMultiMatch, realSameLang
-	case realSameLang == 1:
-		return outcomeCandidateOutOfScope, 1
-	case realOtherLang >= 1:
-		return outcomeCrossLanguageOnly, realOtherLang
-	case stubs >= 1:
-		return outcomeStubOnly, 0
-	default:
-		return outcomeNoDefinition, 0
-	}
 }
 
 // nodeIsDefinitionKind reports whether a node kind is a callable / type
 // definition an unresolved call or reference could legitimately bind to.
+// The resolution-outcome classifier itself now lives in internal/analyzer;
+// this helper stays in the mcp package because id_resolve.go also relies on it.
 func nodeIsDefinitionKind(k graph.NodeKind) bool {
 	switch k {
 	case graph.KindFunction, graph.KindMethod, graph.KindType,
@@ -235,20 +75,4 @@ func nodeIsDefinitionKind(k graph.NodeKind) bool {
 		return true
 	}
 	return false
-}
-
-// sameLanguageFamily folds the TS/JS pair so a cross-file TS→JS reference
-// is not mis-reported as a cross-language suppression.
-func sameLanguageFamily(a, b string) bool {
-	if a == b {
-		return true
-	}
-	norm := func(l string) string {
-		switch l {
-		case "javascript", "typescript", "tsx", "jsx":
-			return "jsts"
-		}
-		return l
-	}
-	return norm(a) == norm(b)
 }
