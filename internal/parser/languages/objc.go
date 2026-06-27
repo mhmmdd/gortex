@@ -263,6 +263,10 @@ func (e *ObjCExtractor) Extract(filePath string, src []byte) (*parser.Extraction
 		return objcEnclosing(methodRanges, line)
 	}, filePath, "objc", result)
 
+	// @selector(doThing:) literals reference a method by name without a call
+	// edge; capture each as a function-as-value reference to the selector.
+	captureObjCSelectors(src, methodRanges, filePath, result)
+
 	// @property declarations become field members of their enclosing class,
 	// carrying the declared type and the owning class so the property is a
 	// fully-attributed field, not a bare name.
